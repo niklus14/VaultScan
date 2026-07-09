@@ -1,0 +1,52 @@
+# Secrets & local config
+.env
+.env.*
+!.env.example
+backend/.env
+backend/data/*
+!backend/data/.gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+.turbo/
+*.tsbuildinfo
+next-env.d.ts
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local reports / demo output
+vaultscan_report.json
+*.log
+
+# Archives & large binaries (keep out of git)
+*.zip
+*.pptx
+*.pdf
+!docs/**/*.md
