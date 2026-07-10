@@ -23,6 +23,12 @@ import {
   enrichAttackPaths,
   type AttackPathEnriched,
 } from "@/lib/api";
+import {
+  CursorGlow,
+  MagneticCard,
+  RippleSurface,
+  SpotlightFrame,
+} from "@/components/cspm/interactive";
 import { cn } from "@/lib/utils";
 import type { Severity } from "@/components/cspm/data";
 
@@ -207,60 +213,71 @@ function CinematicGraph({
             key={i}
             className="relative flex flex-1 flex-col items-center lg:flex-row"
           >
-            <motion.button
-              type="button"
+            <MagneticCard
+              strength={14}
               onClick={() => onStep(Math.min(i, path.steps.length - 1))}
-              initial={{ opacity: 0, scale: 0.85, y: 12 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              transition={{ delay: i * 0.12, duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
-              className={cn(
-                "relative z-10 w-full max-w-[220px] rounded-xl border px-4 py-4 text-left transition",
-                node.kind === "impact"
-                  ? "border-danger/60 bg-danger/20 shadow-[0_0_40px_-8px_rgba(255,61,87,0.7)]"
-                  : activeStep === i
-                    ? "border-accent-blue/60 bg-accent-blue/10 shadow-[0_0_30px_-10px_rgba(56,116,255,0.6)]"
-                    : "border-border bg-panel-alt/90 hover:border-border-strong",
-              )}
+              className="relative z-10 w-full max-w-[220px]"
             >
-              <div className="mb-2 flex items-center gap-2">
-                <span
-                  className={cn(
-                    "flex size-7 items-center justify-center rounded-full border font-mono text-[10px] font-bold",
-                    node.kind === "impact"
-                      ? "border-danger/50 bg-danger/20 text-danger"
-                      : "border-border bg-background text-muted-foreground",
-                  )}
+              <RippleSurface
+                className={cn(
+                  "rounded-xl border px-4 py-4 text-left transition",
+                  node.kind === "impact"
+                    ? "border-danger/60 bg-danger/20 shadow-[0_0_40px_-8px_rgba(255,61,87,0.7)]"
+                    : activeStep === i
+                      ? "border-accent-blue/60 bg-accent-blue/10 shadow-[0_0_30px_-10px_rgba(56,116,255,0.6)]"
+                      : "border-border bg-panel-alt/90 hover:border-border-strong",
+                )}
+              >
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.85, y: 12 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  transition={{
+                    delay: i * 0.12,
+                    duration: 0.45,
+                    ease: [0.22, 1, 0.36, 1],
+                  }}
                 >
-                  {node.kind === "impact" ? (
-                    <Skull className="size-3.5" />
-                  ) : (
-                    i + 1
+                  <div className="mb-2 flex items-center gap-2">
+                    <span
+                      className={cn(
+                        "flex size-7 items-center justify-center rounded-full border font-mono text-[10px] font-bold",
+                        node.kind === "impact"
+                          ? "border-danger/50 bg-danger/20 text-danger"
+                          : "border-border bg-background text-muted-foreground",
+                      )}
+                    >
+                      {node.kind === "impact" ? (
+                        <Skull className="size-3.5" />
+                      ) : (
+                        i + 1
+                      )}
+                    </span>
+                    <span className="font-mono text-[9px] font-bold tracking-[0.16em] text-muted-foreground">
+                      {roleLabel[node.role] || node.role?.toUpperCase()}
+                    </span>
+                  </div>
+                  {node.severity && node.kind !== "impact" && (
+                    <span
+                      className={cn(
+                        "mb-2 inline-block rounded-sm border px-1.5 py-0.5 font-mono text-[9px] font-bold",
+                        severityStyles[node.severity || "HIGH"],
+                      )}
+                    >
+                      {node.severity}
+                    </span>
                   )}
-                </span>
-                <span className="font-mono text-[9px] font-bold tracking-[0.16em] text-muted-foreground">
-                  {roleLabel[node.role] || node.role?.toUpperCase()}
-                </span>
-              </div>
-              {node.severity && node.kind !== "impact" && (
-                <span
-                  className={cn(
-                    "mb-2 inline-block rounded-sm border px-1.5 py-0.5 font-mono text-[9px] font-bold",
-                    severityStyles[node.severity || "HIGH"],
+                  <p className="text-sm font-semibold leading-snug text-foreground">
+                    {node.title}
+                  </p>
+                  {node.resource && (
+                    <p className="mt-1 line-clamp-2 font-mono text-[10px] text-muted-foreground">
+                      {node.service ? `${node.service} · ` : ""}
+                      {node.resource}
+                    </p>
                   )}
-                >
-                  {node.severity}
-                </span>
-              )}
-              <p className="text-sm font-semibold leading-snug text-foreground">
-                {node.title}
-              </p>
-              {node.resource && (
-                <p className="mt-1 line-clamp-2 font-mono text-[10px] text-muted-foreground">
-                  {node.service ? `${node.service} · ` : ""}
-                  {node.resource}
-                </p>
-              )}
-            </motion.button>
+                </motion.div>
+              </RippleSurface>
+            </MagneticCard>
 
             {i < nodes.length - 1 && (
               <>
@@ -363,9 +380,15 @@ export function AttackPathsTab() {
   };
 
   return (
-    <div className="space-y-5">
+    <div className="relative space-y-5">
+      <CursorGlow color="rgba(255, 61, 87, 0.22)" size={320} />
+
       {/* Hero header */}
-      <div className="relative overflow-hidden rounded-xl border border-danger/25 bg-gradient-to-br from-[#1c0b10] via-panel to-panel p-6">
+      <SpotlightFrame
+        spotColor="rgba(255, 61, 87, 0.16)"
+        className="rounded-xl border border-danger/25 bg-gradient-to-br from-[#1c0b10] via-panel to-panel p-6"
+      >
+      <div className="relative overflow-hidden">
         <motion.div
           className="pointer-events-none absolute -right-10 -top-10 size-56 rounded-full bg-danger/20 blur-3xl"
           animate={{ opacity: [0.3, 0.6, 0.3], scale: [1, 1.1, 1] }}
@@ -416,6 +439,7 @@ export function AttackPathsTab() {
           </p>
         )}
       </div>
+      </SpotlightFrame>
 
       {paths.length === 0 ? (
         <div className="flex flex-col items-center justify-center gap-4 rounded-xl border border-dashed border-border bg-panel px-6 py-24 text-center">
@@ -434,45 +458,58 @@ export function AttackPathsTab() {
           {/* Path selector rail */}
           <div className="flex flex-wrap items-center gap-2">
             {paths.map((p, i) => (
-              <button
+              <MagneticCard
                 key={p.id}
-                type="button"
+                strength={10}
                 onClick={() => {
                   setIdx(i);
                   setActiveStep(0);
                 }}
-                className={cn(
-                  "rounded-lg border px-3 py-2 text-left transition",
-                  i === idx
-                    ? "border-danger/50 bg-danger/10"
-                    : "border-border bg-panel hover:border-border-strong",
-                )}
               >
-                <p className="font-mono text-[9px] text-muted-foreground">
-                  PATH {String(i + 1).padStart(2, "0")}
-                </p>
-                <p className="max-w-[160px] truncate text-xs font-semibold text-foreground">
-                  {p.wow_headline || p.name}
-                </p>
-              </button>
+                <RippleSurface
+                  className={cn(
+                    "rounded-lg border px-3 py-2 text-left transition",
+                    i === idx
+                      ? "border-danger/50 bg-danger/10"
+                      : "border-border bg-panel hover:border-border-strong",
+                  )}
+                >
+                  <p className="font-mono text-[9px] text-muted-foreground">
+                    PATH {String(i + 1).padStart(2, "0")}
+                  </p>
+                  <p className="max-w-[160px] truncate text-xs font-semibold text-foreground">
+                    {p.wow_headline || p.name}
+                  </p>
+                </RippleSurface>
+              </MagneticCard>
             ))}
             <div className="ml-auto flex items-center gap-1">
-              <button
-                type="button"
-                onClick={prev}
-                disabled={idx === 0}
-                className="rounded border border-border p-2 text-muted-foreground hover:text-foreground disabled:opacity-30"
+              <RippleSurface
+                className="rounded border border-border"
+                onClick={idx === 0 ? undefined : prev}
               >
-                <ChevronLeft className="size-4" />
-              </button>
-              <button
-                type="button"
-                onClick={next}
-                disabled={idx >= paths.length - 1}
-                className="rounded border border-border p-2 text-muted-foreground hover:text-foreground disabled:opacity-30"
+                <button
+                  type="button"
+                  onClick={prev}
+                  disabled={idx === 0}
+                  className="p-2 text-muted-foreground hover:text-foreground disabled:opacity-30"
+                >
+                  <ChevronLeft className="size-4" />
+                </button>
+              </RippleSurface>
+              <RippleSurface
+                className="rounded border border-border"
+                onClick={idx >= paths.length - 1 ? undefined : next}
               >
-                <ChevronRight className="size-4" />
-              </button>
+                <button
+                  type="button"
+                  onClick={next}
+                  disabled={idx >= paths.length - 1}
+                  className="p-2 text-muted-foreground hover:text-foreground disabled:opacity-30"
+                >
+                  <ChevronRight className="size-4" />
+                </button>
+              </RippleSurface>
             </div>
           </div>
 
@@ -487,7 +524,10 @@ export function AttackPathsTab() {
                 className="space-y-5"
               >
                 {/* Wow headline */}
-                <div className="rounded-xl border border-border bg-panel px-5 py-5 sm:px-7">
+                <SpotlightFrame
+                  spotColor="rgba(56, 116, 255, 0.14)"
+                  className="rounded-xl border border-border bg-panel px-5 py-5 sm:px-7"
+                >
                   <div className="flex flex-wrap items-center gap-2">
                     <span
                       className={cn(
@@ -512,41 +552,42 @@ export function AttackPathsTab() {
                   </p>
 
                   <div className="mt-5 grid gap-3 sm:grid-cols-3">
-                    <div className="rounded-lg border border-border bg-panel-alt px-4 py-3">
-                      <div className="flex items-center gap-2 text-warning">
-                        <Clock className="size-4" />
-                        <p className="font-mono text-[10px] font-bold tracking-wider">
-                          TIME TO COMPROMISE
-                        </p>
-                      </div>
-                      <p className="mt-1.5 text-sm font-medium text-foreground">
-                        {path.time_to_compromise || path.likelihood}
-                      </p>
-                    </div>
-                    <div className="rounded-lg border border-border bg-panel-alt px-4 py-3">
-                      <div className="flex items-center gap-2 text-danger">
-                        <Flame className="size-4" />
-                        <p className="font-mono text-[10px] font-bold tracking-wider">
-                          BLAST RADIUS
-                        </p>
-                      </div>
-                      <p className="mt-1.5 text-sm font-medium text-foreground">
-                        {path.blast_radius || path.impact}
-                      </p>
-                    </div>
-                    <div className="rounded-lg border border-border bg-panel-alt px-4 py-3">
-                      <div className="flex items-center gap-2 text-accent-blue">
-                        <Target className="size-4" />
-                        <p className="font-mono text-[10px] font-bold tracking-wider">
-                          LIKELIHOOD
-                        </p>
-                      </div>
-                      <p className="mt-1.5 text-sm font-medium text-foreground">
-                        {path.likelihood}
-                      </p>
-                    </div>
+                    {[
+                      {
+                        icon: Clock,
+                        color: "text-warning",
+                        label: "TIME TO COMPROMISE",
+                        value: path.time_to_compromise || path.likelihood,
+                      },
+                      {
+                        icon: Flame,
+                        color: "text-danger",
+                        label: "BLAST RADIUS",
+                        value: path.blast_radius || path.impact,
+                      },
+                      {
+                        icon: Target,
+                        color: "text-accent-blue",
+                        label: "LIKELIHOOD",
+                        value: path.likelihood,
+                      },
+                    ].map((card) => (
+                      <MagneticCard key={card.label} strength={8}>
+                        <div className="rounded-lg border border-border bg-panel-alt px-4 py-3">
+                          <div className={cn("flex items-center gap-2", card.color)}>
+                            <card.icon className="size-4" />
+                            <p className="font-mono text-[10px] font-bold tracking-wider">
+                              {card.label}
+                            </p>
+                          </div>
+                          <p className="mt-1.5 text-sm font-medium text-foreground">
+                            {card.value}
+                          </p>
+                        </div>
+                      </MagneticCard>
+                    ))}
                   </div>
-                </div>
+                </SpotlightFrame>
 
                 {/* Cinematic graph */}
                 <CinematicGraph
@@ -557,46 +598,56 @@ export function AttackPathsTab() {
 
                 {/* Two column: playbook + break chain */}
                 <div className="grid gap-4 lg:grid-cols-2">
-                  <div className="rounded-xl border border-border bg-panel p-5">
-                    <div className="mb-3 flex items-center gap-2 text-warning">
-                      <Zap className="size-4" />
-                      <h4 className="font-mono text-[11px] font-bold tracking-[0.16em]">
-                        ATTACKER PLAYBOOK
-                      </h4>
-                    </div>
-                    <pre className="whitespace-pre-wrap font-mono text-xs leading-relaxed text-foreground/90">
-                      {path.attacker_playbook ||
-                        path.steps
-                          .map(
-                            (s, i) =>
-                              `${i + 1}. Abuse ${s.service}: ${s.title}`,
-                          )
-                          .join("\n")}
-                    </pre>
-                  </div>
-                  <div className="rounded-xl border border-success/25 bg-success/5 p-5">
-                    <div className="mb-3 flex items-center gap-2 text-success">
-                      <Lightbulb className="size-4" />
-                      <h4 className="font-mono text-[11px] font-bold tracking-[0.16em]">
-                        BREAK THE CHAIN
-                      </h4>
-                    </div>
-                    <ol className="list-decimal space-y-2 pl-4 text-sm leading-relaxed text-foreground/90">
-                      {path.break_chain.map((b) => (
-                        <li key={b}>{b}</li>
-                      ))}
-                    </ol>
-                    {path.steps[activeStep]?.remediation && (
-                      <div className="mt-4 rounded-md border border-border bg-background p-3">
-                        <p className="font-mono text-[10px] text-muted-foreground">
-                          FIX FOR SELECTED STEP
-                        </p>
-                        <pre className="mt-1 overflow-x-auto font-mono text-[11px] text-success/90">
-                          {path.steps[activeStep].remediation}
-                        </pre>
+                  <MagneticCard strength={9} className="h-full">
+                    <SpotlightFrame
+                      spotColor="rgba(255, 153, 0, 0.12)"
+                      className="h-full rounded-xl border border-border bg-panel p-5"
+                    >
+                      <div className="mb-3 flex items-center gap-2 text-warning">
+                        <Zap className="size-4" />
+                        <h4 className="font-mono text-[11px] font-bold tracking-[0.16em]">
+                          ATTACKER PLAYBOOK
+                        </h4>
                       </div>
-                    )}
-                  </div>
+                      <pre className="whitespace-pre-wrap font-mono text-xs leading-relaxed text-foreground/90">
+                        {path.attacker_playbook ||
+                          path.steps
+                            .map(
+                              (s, i) =>
+                                `${i + 1}. Abuse ${s.service}: ${s.title}`,
+                            )
+                            .join("\n")}
+                      </pre>
+                    </SpotlightFrame>
+                  </MagneticCard>
+                  <MagneticCard strength={9} className="h-full">
+                    <SpotlightFrame
+                      spotColor="rgba(0, 230, 118, 0.12)"
+                      className="h-full rounded-xl border border-success/25 bg-success/5 p-5"
+                    >
+                      <div className="mb-3 flex items-center gap-2 text-success">
+                        <Lightbulb className="size-4" />
+                        <h4 className="font-mono text-[11px] font-bold tracking-[0.16em]">
+                          BREAK THE CHAIN
+                        </h4>
+                      </div>
+                      <ol className="list-decimal space-y-2 pl-4 text-sm leading-relaxed text-foreground/90">
+                        {path.break_chain.map((b) => (
+                          <li key={b}>{b}</li>
+                        ))}
+                      </ol>
+                      {path.steps[activeStep]?.remediation && (
+                        <div className="mt-4 rounded-md border border-border bg-background p-3">
+                          <p className="font-mono text-[10px] text-muted-foreground">
+                            FIX FOR SELECTED STEP
+                          </p>
+                          <pre className="mt-1 overflow-x-auto font-mono text-[11px] text-success/90">
+                            {path.steps[activeStep].remediation}
+                          </pre>
+                        </div>
+                      )}
+                    </SpotlightFrame>
+                  </MagneticCard>
                 </div>
 
                 <div className="flex items-center gap-2 rounded-lg border border-border bg-panel-alt px-4 py-3 font-mono text-[10px] text-muted-foreground">

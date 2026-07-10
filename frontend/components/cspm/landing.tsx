@@ -14,6 +14,11 @@ import {
   Activity,
   Layers,
 } from "lucide-react";
+import {
+  MagneticCard,
+  RippleSurface,
+  SpotlightFrame,
+} from "@/components/cspm/interactive";
 import { cn } from "@/lib/utils";
 
 const FEATURES = [
