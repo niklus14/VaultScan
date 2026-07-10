@@ -24,7 +24,6 @@ import {
   type AttackPathEnriched,
 } from "@/lib/api";
 import {
-  CursorGlow,
   MagneticCard,
   RippleSurface,
   SpotlightFrame,
