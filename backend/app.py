@@ -23,6 +23,7 @@ import connection_store
 from grok_client import (
     GrokError,
     assistant_reply,
+    enrich_attack_paths,
     generate_report_narrative,
     summarize_scan,
 )
@@ -443,6 +444,34 @@ async def ai_summarize(body: SummarizeRequest):
         "scan_id": scan["scan_id"],
         "summary": summary,
         "model": "cloud-assistant",
+    }
+
+
+@app.post("/api/ai/attack-paths")
+async def ai_attack_paths(body: SummarizeRequest):
+    """
+    Return attack paths for a scan, enriched with Cloud Assistant narrative.
+    Uses deterministic chains from the scan, then AI storytelling (no invented resources).
+    """
+    from attack_paths import build_attack_paths
+
+    scan = _find_scan(body.scan_id)
+    if not scan:
+        raise HTTPException(
+            status_code=404,
+            detail="No scan available. Run a scan first.",
+        )
+    raw_paths = scan.get("attack_paths") or build_attack_paths(
+        scan.get("findings") or scan.get("vulnerabilities") or []
+    )
+    paths = await enrich_attack_paths(raw_paths, scan=scan)
+    # cache on scan object in memory for session
+    scan["attack_paths"] = paths
+    return {
+        "scan_id": scan["scan_id"],
+        "paths": paths,
+        "count": len(paths),
+        "ai_used": any(p.get("ai_enriched") for p in paths),
     }
 
 

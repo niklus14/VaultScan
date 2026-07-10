@@ -257,3 +257,137 @@ async def assistant_reply(
         messages.append({"role": role, "content": msg.get("content", "")})
     messages.append({"role": "user", "content": user_message})
     return await chat_completion(messages)
+
+
+async def enrich_attack_paths(
+    paths: list[dict[str, Any]],
+    scan: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """
+    Add cinematic, executive-grade narrative fields to deterministic attack paths.
+
+    For each path, AI may add: story, attacker_playbook, blast_radius,
+    time_to_compromise, wow_headline. Falls back to strong static copy.
+    """
+    if not paths:
+        return []
+
+    enriched: list[dict[str, Any]] = []
+    for p in paths:
+        base = dict(p)
+        base.setdefault(
+            "wow_headline",
+            f"{p.get('severity', 'HIGH')} risk chain: {p.get('name', 'Attack path')}",
+        )
+        base.setdefault(
+            "story",
+            (
+                f"An attacker can chain {len(p.get('steps') or [])} misconfiguration(s) "
+                f"toward: {p.get('outcome', 'serious impact')}. "
+                f"{p.get('impact', '')}"
+            ),
+        )
+        base.setdefault(
+            "attacker_playbook",
+            "1. Discover exposed surface\n2. Abuse misconfiguration\n"
+            "3. Escalate using linked weaknesses\n4. Achieve impact",
+        )
+        base.setdefault("time_to_compromise", "Hours to days (depending on exposure)")
+        base.setdefault(
+            "blast_radius",
+            p.get("impact") or "Account or data assets reachable via this chain",
+        )
+        base.setdefault("ai_enriched", False)
+        enriched.append(base)
+
+    if not settings.grok_api_key:
+        return enriched
+
+    # Compact path brief for the model
+    brief_lines = []
+    for i, p in enumerate(paths, 1):
+        steps = p.get("steps") or []
+        step_txt = " → ".join(
+            f"[{s.get('severity')}] {s.get('service')}:{s.get('resource')} ({s.get('title')})"
+            for s in steps
+        )
+        brief_lines.append(
+            f"{i}. id={p.get('id')} name={p.get('name')} severity={p.get('severity')}\n"
+            f"   chain: {step_txt}\n"
+            f"   outcome: {p.get('outcome')}\n"
+            f"   break: {'; '.join(p.get('break_chain') or [])}"
+        )
+    paths_brief = "\n".join(brief_lines)
+    ctx = findings_context(scan) if scan else ""
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                SYSTEM_PROMPT
+                + "\nYou write cinematic but accurate attack-path narratives for a CSPM product. "
+                "Never invent resources or findings not listed. Never mention model vendors."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                "Enrich these VaultScan attack paths. Return ONLY a JSON array (no markdown fences). "
+                "Each element must be an object with:\n"
+                '  "id": string (same as input id),\n'
+                '  "wow_headline": string (max 12 words, punchy, boardroom-ready),\n'
+                '  "story": string (3-5 sentences: how an attacker moves step by step),\n'
+                '  "attacker_playbook": string (numbered steps as one string with newlines),\n'
+                '  "time_to_compromise": string (realistic estimate),\n'
+                '  "blast_radius": string (what is at stake in business terms)\n'
+                "Do not invent new paths or resources.\n\n"
+                f"PATHS:\n{paths_brief}\n\nSCAN CONTEXT (reference only):\n{ctx[:4000]}"
+            ),
+        },
+    ]
+    try:
+        raw = await chat_completion(messages, temperature=0.35, max_tokens=2500)
+        parsed = _parse_json_array(raw)
+        if not parsed:
+            return enriched
+        by_id = {str(x.get("id")): x for x in parsed if isinstance(x, dict)}
+        for item in enriched:
+            extra = by_id.get(str(item.get("id")))
+            if not extra:
+                continue
+            for key in (
+                "wow_headline",
+                "story",
+                "attacker_playbook",
+                "time_to_compromise",
+                "blast_radius",
+            ):
+                val = extra.get(key)
+                if isinstance(val, str) and val.strip():
+                    item[key] = val.strip()
+            item["ai_enriched"] = True
+        return enriched
+    except Exception:
+        return enriched
+
+
+def _parse_json_array(text: str) -> list[Any] | None:
+    import re
+
+    text = text.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
+    try:
+        data = json.loads(text)
+        return data if isinstance(data, list) else None
+    except json.JSONDecodeError:
+        match = re.search(r"\[[\s\S]*\]", text)
+        if not match:
+            return None
+        try:
+            data = json.loads(match.group(0))
+            return data if isinstance(data, list) else None
+        except json.JSONDecodeError:
+            return None
+

@@ -380,6 +380,43 @@ export function chatWithGrok(body: {
   );
 }
 
+export type AttackPathEnriched = {
+  id: string;
+  name: string;
+  outcome: string;
+  severity: string;
+  likelihood: string;
+  impact: string;
+  steps: Array<{
+    role: string;
+    rule_id?: string;
+    severity?: string;
+    service?: string;
+    resource?: string;
+    title?: string;
+    remediation?: string;
+  }>;
+  break_chain: string[];
+  wow_headline?: string;
+  story?: string;
+  attacker_playbook?: string;
+  time_to_compromise?: string;
+  blast_radius?: string;
+  ai_enriched?: boolean;
+};
+
+export function enrichAttackPaths(scanId?: string) {
+  return request<{
+    scan_id: string;
+    paths: AttackPathEnriched[];
+    count: number;
+    ai_used: boolean;
+  }>("/api/ai/attack-paths", {
+    method: "POST",
+    body: JSON.stringify({ scan_id: scanId ?? null }),
+  });
+}
+
 export function getConnectionSettings() {
   return request<ConnectionSettings>("/api/settings/connection");
 }
