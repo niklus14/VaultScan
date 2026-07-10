@@ -53,17 +53,17 @@ export function Sidebar({
 
   return (
     <aside className="flex h-full w-full flex-col border-r border-border bg-panel">
-      {/* Animated cloud brand — no dense text block */}
-      <div className="relative overflow-hidden border-b border-border px-3 pb-2 pt-3">
+      {/* Google Cloud–style mark + revolving shields */}
+      <div className="relative overflow-hidden border-b border-border px-3 pb-3 pt-4">
         <div
           className="pointer-events-none absolute inset-0 opacity-50"
           style={{
             background:
-              "radial-gradient(ellipse 90% 80% at 50% 20%, rgba(56,116,255,0.2), transparent 60%)",
+              "radial-gradient(ellipse 90% 80% at 50% 30%, rgba(66,133,244,0.22), transparent 62%)",
           }}
         />
         <BrandCloud />
-        <p className="relative -mt-1 pb-1 text-center font-mono text-[10px] font-bold tracking-[0.28em] text-accent-blue/90">
+        <p className="relative mt-0.5 text-center font-mono text-[10px] font-bold tracking-[0.28em] text-foreground/80">
           VAULTSCAN
         </p>
       </div>
