@@ -20,13 +20,16 @@ import {
   scanHistory as mockHistory,
   auditStream as mockAudit,
   infraStatus as mockInfra,
-  postureTrend as mockTrend,
 } from "@/components/cspm/data";
+import {
+  buildTrendFromHistory,
+  type TrendPoint,
+} from "@/components/cspm/posture-chart";
 
 interface ScanStore {
   scan: ScanResult | null;
   history: HistoryItem[];
-  postureTrend: Array<{ t: string; score: number }>;
+  postureTrend: TrendPoint[];
   connection: ConnectionStatus | null;
   config: PublicConfig | null;
   loading: boolean;
@@ -67,16 +70,14 @@ function mapMockAsScan(): ScanResult {
   };
 }
 
+function trendFrom(history: HistoryItem[]): TrendPoint[] {
+  return buildTrendFromHistory(history);
+}
+
 export const useScanStore = create<ScanStore>((set, get) => ({
   scan: null,
-  history: mockHistory.map((h) => ({
-    id: h.id,
-    scan_id: h.id,
-    timestamp: h.timestamp,
-    score: h.score,
-    critical: h.critical,
-  })),
-  postureTrend: mockTrend,
+  history: [],
+  postureTrend: [],
   connection: null,
   config: null,
   loading: false,
@@ -99,7 +100,7 @@ export const useScanStore = create<ScanStore>((set, get) => ({
         mode: config.auth_mode || get().mode,
       });
     } catch {
-      // Backend offline — keep mock defaults
+      /* backend offline */
     }
 
     try {
@@ -110,20 +111,15 @@ export const useScanStore = create<ScanStore>((set, get) => ({
 
     try {
       const latest = await getLatestScan();
-      set({ scan: latest });
       const hist = await listScans();
       set({
+        scan: latest,
         history: hist.scans,
-        postureTrend: hist.scans
-          .slice()
-          .reverse()
-          .map((s) => ({
-            t: s.timestamp.slice(11, 16) || s.scan_id,
-            score: s.score,
-          })),
+        postureTrend: trendFrom(hist.scans),
       });
     } catch {
-      // no scans yet — leave null so UI can show empty / mock fallback
+      // no saved scans — empty trend (not fake decorative data)
+      set({ scan: null, history: [], postureTrend: [] });
     }
   },
 
@@ -146,36 +142,25 @@ export const useScanStore = create<ScanStore>((set, get) => ({
   },
 
   launchScan: async () => {
-    // Prefer server-side Settings profile; optional overrides kept for flexibility
     set({ loading: true, error: null });
     try {
       const result = await runScan({});
       const hist = await listScans();
-      const trend = [
-        ...get().postureTrend,
-        result.posture_point ?? {
-          t: result.timestamp.slice(11, 16),
-          score: result.score,
-        },
-      ].slice(-24);
-
       set({
         scan: result,
         history: hist.scans,
-        postureTrend: trend,
+        postureTrend: trendFrom(hist.scans),
         loading: false,
         error: null,
       });
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Scan failed";
       set({ loading: false, error: msg });
-      // Auto-fallback suggestion is shown in UI; optional soft simulate retry not forced
       throw e;
     }
   },
 }));
 
-/** Helpers that components use — prefer live scan, fall back to design mock. */
 export function useLiveData() {
   const scan = useScanStore((s) => s.scan);
   const history = useScanStore((s) => s.history);
@@ -220,14 +205,17 @@ export function useLiveData() {
     infraStatus: active.infra_status,
     history: history.length
       ? history
-      : mockHistory.map((h) => ({
-          id: h.id,
-          scan_id: h.id,
-          timestamp: h.timestamp,
-          score: h.score,
-          critical: h.critical,
-        })),
+      : isLive
+        ? []
+        : mockHistory.map((h) => ({
+            id: h.id,
+            scan_id: h.id,
+            timestamp: h.timestamp,
+            score: h.score,
+            critical: h.critical,
+          })),
     postureTrend,
+    hasRealTrend: postureTrend.length > 0,
     scanId: active.scan_id,
     timestamp: active.timestamp,
     accountId: active.account_id,
