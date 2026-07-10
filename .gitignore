@@ -50,3 +50,4 @@ vaultscan_report.json
 *.pptx
 *.pdf
 !docs/VaultScan_How_Detection_Works.pdf
+!docs/misconflist.pdf
