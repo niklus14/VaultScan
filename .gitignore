@@ -45,9 +45,8 @@ Thumbs.db
 vaultscan_report.json
 *.log
 
-# Archives & large binaries (keep out of git)
+# Archives & large binaries (keep methodology PDF)
 *.zip
 *.pptx
 *.pdf
 !docs/VaultScan_How_Detection_Works.pdf
-!docs/**/*.md
