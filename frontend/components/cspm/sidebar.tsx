@@ -1,16 +1,14 @@
 "use client";
 
 import {
-  ShieldHalf,
   Radar,
   Loader2,
   Settings2,
   Link2,
-  ShieldCheck,
-  Hexagon,
 } from "lucide-react";
 import { NAV_ITEMS, type TabId } from "./data";
 import { useLiveData } from "@/lib/scan-store";
+import { BrandCloud } from "./brand-cloud";
 import { cn } from "@/lib/utils";
 
 export function Sidebar({
@@ -55,38 +53,19 @@ export function Sidebar({
 
   return (
     <aside className="flex h-full w-full flex-col border-r border-border bg-panel">
-      {/* Premium brand header */}
-      <div className="relative overflow-hidden border-b border-border px-5 py-5">
+      {/* Animated cloud brand — no dense text block */}
+      <div className="relative overflow-hidden border-b border-border px-3 pb-2 pt-3">
         <div
-          className="pointer-events-none absolute inset-0 opacity-40"
+          className="pointer-events-none absolute inset-0 opacity-50"
           style={{
             background:
-              "radial-gradient(ellipse 80% 70% at 10% 0%, rgba(56,116,255,0.22), transparent 55%)",
+              "radial-gradient(ellipse 90% 80% at 50% 20%, rgba(56,116,255,0.2), transparent 60%)",
           }}
         />
-        <div className="relative flex items-center gap-3">
-          <div className="relative">
-            <div className="glow-blue flex size-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-accent-blue to-[#1e4fd6] shadow-lg">
-              <ShieldHalf className="size-5 text-white" strokeWidth={2.4} />
-            </div>
-            <span className="absolute -bottom-0.5 -right-0.5 flex size-3.5 items-center justify-center rounded-full border-2 border-panel bg-success">
-              <span className="size-1 rounded-full bg-panel" />
-            </span>
-          </div>
-          <div className="min-w-0 leading-tight">
-            <div className="flex items-center gap-2">
-              <h1 className="bg-gradient-to-r from-foreground via-foreground to-accent-blue bg-clip-text font-mono text-[13px] font-bold tracking-[0.14em] text-transparent">
-                VAULTSCAN
-              </h1>
-              <span className="rounded border border-accent-blue/30 bg-accent-blue/10 px-1.5 py-px font-mono text-[8px] font-bold tracking-wider text-accent-blue">
-                CSPM
-              </span>
-            </div>
-            <p className="mt-1 text-[10px] font-medium tracking-[0.12em] text-muted-foreground">
-              Cloud Security Posture
-            </p>
-          </div>
-        </div>
+        <BrandCloud />
+        <p className="relative -mt-1 pb-1 text-center font-mono text-[10px] font-bold tracking-[0.28em] text-accent-blue/90">
+          VAULTSCAN
+        </p>
       </div>
 
       <nav className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -201,46 +180,22 @@ export function Sidebar({
           )}
         </div>
 
-        {/* Pro brand footer — bottom left */}
+        {/* Bottom: same turning cloud, compact */}
         <div className="shrink-0 border-t border-border p-3">
-          <div className="relative overflow-hidden rounded-xl border border-border bg-gradient-to-br from-[#12141c] via-panel-alt to-[#0d1528] p-3.5">
+          <div className="relative overflow-hidden rounded-xl border border-border bg-gradient-to-br from-[#12141c] via-panel-alt to-[#0d1528] px-2 py-2">
             <div
-              className="pointer-events-none absolute -right-4 -top-4 size-20 rounded-full opacity-30"
+              className="pointer-events-none absolute inset-0 opacity-40"
               style={{
                 background:
-                  "radial-gradient(circle, rgba(56,116,255,0.45), transparent 70%)",
+                  "radial-gradient(circle at 50% 40%, rgba(56,116,255,0.35), transparent 65%)",
               }}
             />
-            <div className="relative flex items-start gap-3">
-              <div className="relative flex size-10 shrink-0 items-center justify-center rounded-lg border border-accent-blue/25 bg-accent-blue/10">
-                <Hexagon
-                  className="absolute size-8 text-accent-blue/25"
-                  strokeWidth={1.2}
-                />
-                <ShieldCheck className="relative size-4 text-accent-blue" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-1.5">
-                  <p className="font-mono text-[11px] font-bold tracking-[0.16em] text-foreground">
-                    VAULTSCAN
-                  </p>
-                  <span className="rounded-sm bg-success/15 px-1 py-px font-mono text-[8px] font-bold tracking-wider text-success">
-                    PRO
-                  </span>
-                </div>
-                <p className="mt-0.5 text-[10px] leading-snug text-muted-foreground">
-                  Enterprise cloud posture · continuous assurance
-                </p>
-                <div className="mt-2 flex items-center gap-2">
-                  <span className="inline-flex items-center gap-1 rounded-full border border-border bg-background/50 px-2 py-0.5 font-mono text-[8px] tracking-wider text-muted-foreground">
-                    <span className="pulse-dot size-1 rounded-full bg-success" />
-                    ENGINE v1.0
-                  </span>
-                  <span className="font-mono text-[8px] tracking-wider text-muted-foreground/70">
-                    SECURE BY DESIGN
-                  </span>
-                </div>
-              </div>
+            <BrandCloud className="!h-[72px] scale-90" />
+            <div className="relative -mt-1 flex items-center justify-center gap-2 pb-1">
+              <span className="pulse-dot size-1.5 rounded-full bg-success" />
+              <span className="font-mono text-[9px] tracking-[0.2em] text-muted-foreground">
+                SECURE CLOUD
+              </span>
             </div>
           </div>
         </div>

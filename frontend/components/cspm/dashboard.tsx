@@ -115,7 +115,13 @@ export function Dashboard() {
           </div>
         </header>
 
-        <div className="flex-1 overflow-y-auto p-6">
+        <div
+          className={
+            active === "overview"
+              ? "flex min-h-0 flex-1 flex-col overflow-y-auto p-6"
+              : "flex-1 overflow-y-auto p-6"
+          }
+        >
           {active === "overview" && <OverviewTab />}
           {active === "vulnerability" && <VulnerabilityFeedTab />}
           {active === "compliance" && <ComplianceRegistryTab />}
@@ -146,10 +152,6 @@ export function Dashboard() {
           })}
         </nav>
       </main>
-
-      <div className="hidden w-[320px] shrink-0 xl:block">
-        <AuditStream />
-      </div>
 
       {reportOpen && <ScanReport onClose={() => setReportOpen(false)} />}
       <AiAssistant />

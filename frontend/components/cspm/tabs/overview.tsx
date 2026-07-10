@@ -142,16 +142,10 @@ export function OverviewTab() {
       {/* Chart + infra */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <div className="rounded-lg border border-border bg-panel p-5 lg:col-span-2">
-          <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <h3 className="font-mono text-xs font-bold tracking-[0.14em] text-foreground">
-                POSTURE TREND (SCAN HISTORY)
-              </h3>
-              <p className="mt-1 text-[11px] text-muted-foreground">
-                Real scores from each VaultScan run — not a decorative chart.
-                Hover a point for details; use the table for exact deltas.
-              </p>
-            </div>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <h3 className="font-mono text-xs font-bold tracking-[0.14em] text-foreground">
+              POSTURE TREND
+            </h3>
             <span
               className={cn(
                 "rounded-sm border px-2 py-0.5 font-mono text-[10px]",
@@ -165,9 +159,7 @@ export function OverviewTab() {
                 : "WAITING FOR SCANS"}
             </span>
           </div>
-          <div className="mt-3">
-            <PostureChart data={postureTrend} />
-          </div>
+          <PostureChart data={postureTrend} />
         </div>
 
         <div className="flex flex-col rounded-lg border border-border bg-panel p-5">
