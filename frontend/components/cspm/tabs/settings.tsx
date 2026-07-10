@@ -23,6 +23,7 @@ import {
   testConnectionSettings,
   clearConnectionCredentials,
   type ConnectionSettings,
+  type CloudProvider,
   type ScanMode,
 } from "@/lib/api";
 import { useScanStore } from "@/lib/scan-store";
@@ -40,6 +41,26 @@ const REGIONS = [
   "ap-northeast-1",
 ];
 
+const PROVIDERS: {
+  id: CloudProvider;
+  title: string;
+  subtitle: string;
+  badge: string;
+}[] = [
+  {
+    id: "aws",
+    title: "Amazon Web Services",
+    subtitle: "Connect with IAM keys + optional AssumeRole (full scan engine).",
+    badge: "AWS",
+  },
+  {
+    id: "gcp",
+    title: "Google Cloud",
+    subtitle: "Connect with a Project ID + service account JSON key.",
+    badge: "GCP",
+  },
+];
+
 const AUTH_OPTIONS: {
   id: ScanMode;
   title: string;
@@ -53,21 +74,21 @@ const AUTH_OPTIONS: {
     badge: "Recommended",
     recommended: true,
     description:
-      "VaultScan uses your Access Key only to assume a read-only IAM Role in the target account. Short-lived credentials are used for scanning — industry standard for CSPM platforms.",
+      "Access Key only calls sts:AssumeRole. Scanning uses short-lived role credentials.",
   },
   {
     id: "direct",
     title: "Access keys (direct)",
     badge: "Simple",
     description:
-      "Scan with the Access Key itself. Faster to set up for a single account, but less ideal for multi-account production.",
+      "Scan with the Access Key itself. Faster for a single account.",
   },
   {
     id: "simulate",
     title: "Demo environment",
-    badge: "No AWS required",
+    badge: "No cloud required",
     description:
-      "Run against a simulated vulnerable cloud. Perfect for demos and training without connecting a real account.",
+      "Simulated vulnerable resources for demos and training.",
   },
 ];
 
@@ -82,12 +103,10 @@ function FieldLabel({
 }) {
   return (
     <div className="mb-1.5">
-      <div className="flex items-center gap-2">
-        <label className="font-mono text-[11px] font-bold tracking-[0.12em] text-foreground">
-          {label}
-          {required && <span className="ml-1 text-danger">*</span>}
-        </label>
-      </div>
+      <label className="font-mono text-[11px] font-bold tracking-[0.12em] text-foreground">
+        {label}
+        {required && <span className="ml-1 text-danger">*</span>}
+      </label>
       {hint && (
         <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
           {hint}
@@ -176,8 +195,8 @@ export function SettingsTab() {
   } | null>(null);
   const [settings, setSettings] = useState<ConnectionSettings | null>(null);
 
-  // Form state
-  const [connectionName, setConnectionName] = useState("Primary AWS Account");
+  const [provider, setProvider] = useState<CloudProvider>("aws");
+  const [connectionName, setConnectionName] = useState("Primary Cloud Account");
   const [authMode, setAuthMode] = useState<ScanMode>("assume_role");
   const [roleArn, setRoleArnLocal] = useState("");
   const [externalId, setExternalId] = useState("");
@@ -185,21 +204,25 @@ export function SettingsTab() {
   const [accessKeyId, setAccessKeyId] = useState("");
   const [secretKey, setSecretKey] = useState("");
   const [sessionToken, setSessionToken] = useState("");
+  const [gcpProjectId, setGcpProjectId] = useState("");
+  const [gcpSaJson, setGcpSaJson] = useState("");
 
   const load = async () => {
     setLoading(true);
     try {
       const s = await getConnectionSettings();
       setSettings(s);
+      setProvider((s.provider as CloudProvider) === "gcp" ? "gcp" : "aws");
       setConnectionName(s.connection_name);
       setAuthMode(s.auth_mode);
       setRoleArnLocal(s.role_arn || "");
       setExternalId(s.external_id || "");
       setRegionLocal(s.region || "us-east-1");
-      // Never prefill secret; access key stays empty unless user re-enters
+      setGcpProjectId(s.gcp_project_id || "");
       setAccessKeyId("");
       setSecretKey("");
       setSessionToken("");
+      setGcpSaJson("");
     } catch (e) {
       setBanner({
         type: "error",
@@ -217,20 +240,25 @@ export function SettingsTab() {
     void load();
   }, []);
 
+  const payload = () => ({
+    connection_name: connectionName,
+    provider,
+    auth_mode: authMode,
+    role_arn: roleArn,
+    external_id: externalId,
+    region,
+    access_key_id: accessKeyId || undefined,
+    secret_access_key: secretKey || undefined,
+    session_token: sessionToken || undefined,
+    gcp_project_id: gcpProjectId || undefined,
+    gcp_service_account_json: gcpSaJson || undefined,
+  });
+
   const onSave = async () => {
     setSaving(true);
     setBanner(null);
     try {
-      const res = await saveConnectionSettings({
-        connection_name: connectionName,
-        auth_mode: authMode,
-        role_arn: roleArn,
-        external_id: externalId,
-        region,
-        access_key_id: accessKeyId || undefined,
-        secret_access_key: secretKey || undefined,
-        session_token: sessionToken || undefined,
-      });
+      const res = await saveConnectionSettings(payload());
       setSettings(res.connection);
       setMode(res.connection.auth_mode);
       setRoleArn(res.connection.role_arn);
@@ -238,6 +266,7 @@ export function SettingsTab() {
       setAccessKeyId("");
       setSecretKey("");
       setSessionToken("");
+      setGcpSaJson("");
       setBanner({ type: "ok", text: res.message });
       await refreshConnection();
       await bootstrap();
@@ -255,26 +284,14 @@ export function SettingsTab() {
     setTesting(true);
     setBanner(null);
     try {
-      // Save first so test uses current form values
-      await saveConnectionSettings({
-        connection_name: connectionName,
-        auth_mode: authMode,
-        role_arn: roleArn,
-        external_id: externalId,
-        region,
-        access_key_id: accessKeyId || undefined,
-        secret_access_key: secretKey || undefined,
-        session_token: sessionToken || undefined,
-      });
+      await saveConnectionSettings(payload());
       const res = await testConnectionSettings();
       setSettings(res.settings);
       setAccessKeyId("");
       setSecretKey("");
       setSessionToken("");
-      setBanner({
-        type: res.ok ? "ok" : "error",
-        text: res.message,
-      });
+      setGcpSaJson("");
+      setBanner({ type: res.ok ? "ok" : "error", text: res.message });
       setMode(res.settings.auth_mode);
       setRoleArn(res.settings.role_arn);
       setRegion(res.settings.region);
@@ -292,7 +309,7 @@ export function SettingsTab() {
   const onClearKeys = async () => {
     if (
       !confirm(
-        "Remove stored Access Key and Secret from the VaultScan server? You can add new keys later.",
+        "Remove stored cloud credentials from the VaultScan server?",
       )
     ) {
       return;
@@ -304,6 +321,7 @@ export function SettingsTab() {
       setSettings(res.connection);
       setAccessKeyId("");
       setSecretKey("");
+      setGcpSaJson("");
       setBanner({ type: "info", text: res.message });
       await refreshConnection();
     } catch (e) {
@@ -325,12 +343,14 @@ export function SettingsTab() {
     );
   }
 
-  const needsKeys = authMode !== "simulate";
-  const needsRole = authMode === "assume_role";
+  const isAws = provider === "aws";
+  const isGcp = provider === "gcp";
+  const needsKeys = isAws && authMode !== "simulate";
+  const needsRole = isAws && authMode === "assume_role";
 
   return (
     <div className="mx-auto max-w-4xl space-y-5">
-      {/* Header card */}
+      {/* Header */}
       <div className="rounded-lg border border-border bg-panel p-5">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="flex items-start gap-3">
@@ -342,9 +362,8 @@ export function SettingsTab() {
                 CLOUD CONNECTION
               </h3>
               <p className="mt-1 max-w-xl text-xs leading-relaxed text-muted-foreground">
-                Connect an AWS account so VaultScan can discover misconfigurations.
-                Credentials stay on the VaultScan server and are never exposed in
-                full after you save them.
+                Choose a cloud provider, then connect securely. Credentials stay
+                on the VaultScan server and are never shown in full after save.
               </p>
             </div>
           </div>
@@ -352,14 +371,12 @@ export function SettingsTab() {
             <StatusPill status={settings?.last_test_status ?? "never"} />
             {settings?.last_account_id && (
               <span className="font-mono text-[10px] text-muted-foreground">
-                Account {settings.last_account_id}
+                {isGcp ? "Project" : "Account"} {settings.last_account_id}
               </span>
             )}
-            {settings?.access_key_id_masked && (
-              <span className="font-mono text-[10px] text-muted-foreground">
-                Key {settings.access_key_id_masked}
-              </span>
-            )}
+            <span className="rounded-sm border border-border px-2 py-0.5 font-mono text-[10px] font-bold tracking-wider text-muted-foreground">
+              {(settings?.provider || provider).toUpperCase()}
+            </span>
           </div>
         </div>
       </div>
@@ -380,47 +397,61 @@ export function SettingsTab() {
         </div>
       )}
 
-      {/* Connection method */}
+      {/* 1. Provider selection */}
       <section className="rounded-lg border border-border bg-panel p-5">
         <div className="mb-4 flex items-center gap-2">
-          <Shield className="size-4 text-accent-blue" />
+          <Cloud className="size-4 text-accent-blue" />
           <h4 className="font-mono text-xs font-bold tracking-[0.14em] text-foreground">
-            1. CONNECTION METHOD
+            1. CLOUD PROVIDER
           </h4>
         </div>
-        <div className="grid gap-3 md:grid-cols-3">
-          {AUTH_OPTIONS.map((opt) => {
-            const active = authMode === opt.id;
+        <p className="mb-4 text-[11px] text-muted-foreground">
+          Select where VaultScan should connect. Each provider uses a different
+          authentication method.
+        </p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {PROVIDERS.map((p) => {
+            const active = provider === p.id;
             return (
               <button
-                key={opt.id}
+                key={p.id}
                 type="button"
-                onClick={() => setAuthMode(opt.id)}
+                onClick={() => {
+                  setProvider(p.id);
+                  if (p.id === "gcp" && authMode === "assume_role") {
+                    /* keep auth_mode for demo; GCP ignores assume_role fields */
+                  }
+                }}
                 className={cn(
-                  "rounded-md border p-4 text-left transition-colors",
+                  "rounded-lg border p-4 text-left transition",
                   active
                     ? "border-accent-blue/50 bg-accent-blue/10"
                     : "border-border bg-panel-alt hover:border-border-strong",
                 )}
               >
                 <div className="mb-2 flex items-center justify-between gap-2">
-                  <span className="text-xs font-semibold text-foreground">
-                    {opt.title}
+                  <span className="text-sm font-semibold text-foreground">
+                    {p.title}
                   </span>
                   <span
                     className={cn(
-                      "shrink-0 rounded-sm px-1.5 py-0.5 font-mono text-[9px] font-bold tracking-wider",
-                      opt.recommended
-                        ? "bg-success/15 text-success"
+                      "rounded-sm px-1.5 py-0.5 font-mono text-[9px] font-bold tracking-wider",
+                      active
+                        ? "bg-accent-blue/20 text-accent-blue"
                         : "bg-white/5 text-muted-foreground",
                     )}
                   >
-                    {opt.badge}
+                    {p.badge}
                   </span>
                 </div>
                 <p className="text-[11px] leading-relaxed text-muted-foreground">
-                  {opt.description}
+                  {p.subtitle}
                 </p>
+                {active && (
+                  <p className="mt-2 font-mono text-[10px] font-bold text-accent-blue">
+                    SELECTED
+                  </p>
+                )}
               </button>
             );
           })}
@@ -439,189 +470,293 @@ export function SettingsTab() {
           <div>
             <FieldLabel
               label="DISPLAY NAME"
-              hint="A friendly name shown in the dashboard (e.g. Production, Staging)."
+              hint="Friendly name in the dashboard (e.g. Production, Lab)."
             />
             <TextInput
               value={connectionName}
               onChange={setConnectionName}
-              placeholder="Primary AWS Account"
+              placeholder="Primary Cloud Account"
               mono={false}
             />
           </div>
-          <div>
-            <FieldLabel
-              label="AWS REGION"
-              hint="Primary region used for regional services (EC2, RDS, etc.)."
-              required
-            />
-            <select
-              value={region}
-              onChange={(e) => setRegionLocal(e.target.value)}
-              className="w-full rounded-md border border-border bg-background px-3 py-2.5 font-mono text-xs text-foreground outline-none focus:border-accent-blue/50"
-            >
-              {REGIONS.map((r) => (
-                <option key={r} value={r}>
-                  {r}
-                </option>
-              ))}
-            </select>
-          </div>
+          {isAws && (
+            <div>
+              <FieldLabel label="AWS REGION" required hint="Primary region for regional APIs." />
+              <select
+                value={region}
+                onChange={(e) => setRegionLocal(e.target.value)}
+                className="w-full rounded-md border border-border bg-background px-3 py-2.5 font-mono text-xs text-foreground outline-none focus:border-accent-blue/50"
+              >
+                {REGIONS.map((r) => (
+                  <option key={r} value={r}>
+                    {r}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          {isGcp && (
+            <div>
+              <FieldLabel
+                label="GCP PROJECT ID"
+                required
+                hint="Project ID from Google Cloud Console (not the display name)."
+              />
+              <TextInput
+                value={gcpProjectId}
+                onChange={setGcpProjectId}
+                placeholder="my-project-123456"
+              />
+            </div>
+          )}
         </div>
       </section>
 
-      {/* Role */}
-      {needsRole && (
-        <section className="rounded-lg border border-border bg-panel p-5">
-          <div className="mb-4 flex items-center gap-2">
-            <Shield className="size-4 text-accent-blue" />
-            <h4 className="font-mono text-xs font-bold tracking-[0.14em] text-foreground">
-              3. TARGET IAM ROLE
-            </h4>
-          </div>
-          <div className="space-y-4">
-            <div>
-              <FieldLabel
-                label="ROLE ARN"
-                required
-                hint="Must be an IAM Role (contains :role/), not an IAM User (:user/). Example: arn:aws:iam::850919910218:role/demo-test-vulnerable-ec2-role"
-              />
-              <TextInput
-                value={roleArn}
-                onChange={setRoleArnLocal}
-                placeholder="arn:aws:iam::850919910218:role/demo-test-vulnerable-ec2-role"
-              />
-              {roleArn.includes(":user/") && (
-                <p className="mt-2 rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-[11px] leading-relaxed text-danger">
-                  This looks like a <strong>User</strong> ARN. You cannot
-                  AssumeRole on a user. Either paste a{" "}
-                  <strong>Role</strong> ARN (…:role/Name), or switch connection
-                  method to <strong>Access keys (direct)</strong> if scanning as
-                  this user.
-                </p>
+      {/* AWS-only sections */}
+      {isAws && (
+        <>
+          <section className="rounded-lg border border-border bg-panel p-5">
+            <div className="mb-4 flex items-center gap-2">
+              <Shield className="size-4 text-accent-blue" />
+              <h4 className="font-mono text-xs font-bold tracking-[0.14em] text-foreground">
+                3. AWS CONNECTION METHOD
+              </h4>
+            </div>
+            <div className="grid gap-3 md:grid-cols-3">
+              {AUTH_OPTIONS.map((opt) => {
+                const active = authMode === opt.id;
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => setAuthMode(opt.id)}
+                    className={cn(
+                      "rounded-md border p-4 text-left transition-colors",
+                      active
+                        ? "border-accent-blue/50 bg-accent-blue/10"
+                        : "border-border bg-panel-alt hover:border-border-strong",
+                    )}
+                  >
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <span className="text-xs font-semibold text-foreground">
+                        {opt.title}
+                      </span>
+                      <span
+                        className={cn(
+                          "shrink-0 rounded-sm px-1.5 py-0.5 font-mono text-[9px] font-bold tracking-wider",
+                          opt.recommended
+                            ? "bg-success/15 text-success"
+                            : "bg-white/5 text-muted-foreground",
+                        )}
+                      >
+                        {opt.badge}
+                      </span>
+                    </div>
+                    <p className="text-[11px] leading-relaxed text-muted-foreground">
+                      {opt.description}
+                    </p>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+
+          {needsRole && (
+            <section className="rounded-lg border border-border bg-panel p-5">
+              <div className="mb-4 flex items-center gap-2">
+                <Shield className="size-4 text-accent-blue" />
+                <h4 className="font-mono text-xs font-bold tracking-[0.14em] text-foreground">
+                  4. TARGET IAM ROLE
+                </h4>
+              </div>
+              <div className="space-y-4">
+                <div>
+                  <FieldLabel
+                    label="ROLE ARN"
+                    required
+                    hint="Must be an IAM Role (…:role/…), not a User ARN."
+                  />
+                  <TextInput
+                    value={roleArn}
+                    onChange={setRoleArnLocal}
+                    placeholder="arn:aws:iam::123456789012:role/VaultScan-ReadOnly"
+                  />
+                  {roleArn.includes(":user/") && (
+                    <p className="mt-2 rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-[11px] text-danger">
+                      This looks like a User ARN. Use a Role ARN or switch to
+                      Access keys (direct).
+                    </p>
+                  )}
+                </div>
+                <div>
+                  <FieldLabel
+                    label="EXTERNAL ID (OPTIONAL)"
+                    hint="Only if the role trust policy requires ExternalId."
+                  />
+                  <TextInput
+                    value={externalId}
+                    onChange={setExternalId}
+                    placeholder="vaultscan-external-id"
+                  />
+                </div>
+              </div>
+            </section>
+          )}
+
+          {needsKeys && (
+            <section className="rounded-lg border border-border bg-panel p-5">
+              <div className="mb-1 flex items-center gap-2">
+                <KeyRound className="size-4 text-accent-blue" />
+                <h4 className="font-mono text-xs font-bold tracking-[0.14em] text-foreground">
+                  {needsRole ? "5." : "4."} AWS ACCESS CREDENTIALS
+                </h4>
+              </div>
+              <p className="mb-4 text-[11px] leading-relaxed text-muted-foreground">
+                IAM → Users → Security credentials → Create access key.
+              </p>
+              {settings?.credentials_configured && settings.provider === "aws" && (
+                <div className="mb-4 flex items-start gap-2 rounded-md border border-success/20 bg-success/5 px-3 py-2.5 text-[11px] text-muted-foreground">
+                  <Lock className="mt-0.5 size-3.5 shrink-0 text-success" />
+                  <p>
+                    Keys stored on server
+                    {settings.access_key_id_masked
+                      ? `: ${settings.access_key_id_masked}`
+                      : ""}
+                    . Leave fields blank to keep them.
+                  </p>
+                </div>
               )}
-            </div>
-            <div>
-              <FieldLabel
-                label="EXTERNAL ID (OPTIONAL)"
-                hint="Shared secret if the role trust policy requires sts:ExternalId. Leave blank if not used."
-              />
-              <TextInput
-                value={externalId}
-                onChange={setExternalId}
-                placeholder="vaultscan-external-id"
-              />
-            </div>
-          </div>
-        </section>
+              <div className="space-y-4">
+                <div>
+                  <FieldLabel label="ACCESS KEY ID" required={!settings?.has_access_key} />
+                  <TextInput
+                    value={accessKeyId}
+                    onChange={setAccessKeyId}
+                    placeholder={
+                      settings?.access_key_id_masked
+                        ? `Stored: ${settings.access_key_id_masked}`
+                        : "AKIA…"
+                    }
+                  />
+                </div>
+                <div>
+                  <FieldLabel
+                    label="SECRET ACCESS KEY"
+                    required={!settings?.has_secret_key}
+                  />
+                  <div className="relative">
+                    <TextInput
+                      value={secretKey}
+                      onChange={setSecretKey}
+                      type={showSecret ? "text" : "password"}
+                      placeholder={
+                        settings?.has_secret_key
+                          ? "•••••••• (leave blank to keep)"
+                          : "Enter secret access key"
+                      }
+                      autoComplete="new-password"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowSecret((v) => !v)}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1.5 text-muted-foreground hover:text-foreground"
+                    >
+                      {showSecret ? (
+                        <EyeOff className="size-4" />
+                      ) : (
+                        <Eye className="size-4" />
+                      )}
+                    </button>
+                  </div>
+                </div>
+                <div>
+                  <FieldLabel
+                    label="SESSION TOKEN (OPTIONAL)"
+                    hint="Only for temporary credentials (SSO)."
+                  />
+                  <TextInput
+                    value={sessionToken}
+                    onChange={setSessionToken}
+                    type="password"
+                    placeholder="Optional"
+                  />
+                </div>
+              </div>
+            </section>
+          )}
+        </>
       )}
 
-      {/* Credentials */}
-      {needsKeys && (
+      {/* GCP section */}
+      {isGcp && (
         <section className="rounded-lg border border-border bg-panel p-5">
           <div className="mb-1 flex items-center gap-2">
             <KeyRound className="size-4 text-accent-blue" />
             <h4 className="font-mono text-xs font-bold tracking-[0.14em] text-foreground">
-              {needsRole ? "4." : "3."} AWS ACCESS CREDENTIALS
+              3. GOOGLE CLOUD CREDENTIALS
             </h4>
           </div>
           <p className="mb-4 text-[11px] leading-relaxed text-muted-foreground">
-            Create these in the{" "}
-            <span className="text-foreground">AWS Console → IAM → Users → Security credentials → Create access key</span>
-            . Prefer a dedicated user with only the permissions VaultScan needs
-            {needsRole ? " (typically sts:AssumeRole on the role above)." : "."}
+            Create a service account in{" "}
+            <span className="text-foreground">
+              GCP Console → IAM &amp; Admin → Service Accounts
+            </span>
+            , grant read-only roles (e.g. Viewer / Security Reviewer), then{" "}
+            <span className="text-foreground">Keys → Add key → JSON</span> and
+            paste the full file below.
           </p>
-
-          {settings?.credentials_configured && (
+          {settings?.has_gcp_service_account && (
             <div className="mb-4 flex items-start gap-2 rounded-md border border-success/20 bg-success/5 px-3 py-2.5 text-[11px] text-muted-foreground">
               <Lock className="mt-0.5 size-3.5 shrink-0 text-success" />
-              <div>
-                <p className="font-medium text-foreground">
-                  Credentials are already stored on the server
-                </p>
-                <p className="mt-0.5">
-                  Access Key:{" "}
-                  <span className="font-mono text-foreground">
-                    {settings.access_key_id_masked}
-                  </span>
-                  . Leave the fields below empty to keep the current secret, or
-                  enter new values to replace them.
-                </p>
-              </div>
+              <p>
+                Service account stored
+                {settings.gcp_service_account_email_masked
+                  ? `: ${settings.gcp_service_account_email_masked}`
+                  : ""}
+                . Leave JSON blank to keep it.
+              </p>
             </div>
           )}
-
-          <div className="space-y-4">
-            <div>
-              <FieldLabel
-                label="ACCESS KEY ID"
-                required={!settings?.has_access_key}
-                hint="Public identifier starting with AKIA… (or ASIA… for temporary keys)."
-              />
-              <TextInput
-                value={accessKeyId}
-                onChange={setAccessKeyId}
-                placeholder={
-                  settings?.access_key_id_masked
-                    ? `Stored: ${settings.access_key_id_masked} — enter new to replace`
-                    : "AKIA…"
-                }
-                autoComplete="off"
-              />
-            </div>
-            <div>
-              <FieldLabel
-                label="SECRET ACCESS KEY"
-                required={!settings?.has_secret_key}
-                hint="Private secret shown only once when the key is created in AWS. Treat it like a password."
-              />
-              <div className="relative">
-                <TextInput
-                  value={secretKey}
-                  onChange={setSecretKey}
-                  type={showSecret ? "text" : "password"}
-                  placeholder={
-                    settings?.has_secret_key
-                      ? "••••••••  (leave blank to keep existing)"
-                      : "Enter secret access key"
-                  }
-                  autoComplete="new-password"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowSecret((v) => !v)}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1.5 text-muted-foreground hover:text-foreground"
-                  aria-label={showSecret ? "Hide secret" : "Show secret"}
-                >
-                  {showSecret ? (
-                    <EyeOff className="size-4" />
-                  ) : (
-                    <Eye className="size-4" />
-                  )}
-                </button>
-              </div>
-            </div>
-            <div>
-              <FieldLabel
-                label="SESSION TOKEN (OPTIONAL)"
-                hint="Only needed for temporary credentials (SSO / assumed sessions). Leave blank for standard long-lived IAM user keys."
-              />
-              <TextInput
-                value={sessionToken}
-                onChange={setSessionToken}
-                type="password"
-                placeholder={
-                  settings?.has_session_token
-                    ? "••••  (leave blank to keep existing)"
-                    : "Optional"
-                }
-                autoComplete="off"
-              />
-            </div>
+          <div>
+            <FieldLabel
+              label="SERVICE ACCOUNT JSON"
+              required={!settings?.has_gcp_service_account}
+              hint="Paste the entire JSON key file contents."
+            />
+            <textarea
+              value={gcpSaJson}
+              onChange={(e) => setGcpSaJson(e.target.value)}
+              rows={8}
+              placeholder={
+                settings?.has_gcp_service_account
+                  ? "••••  (leave blank to keep existing key)"
+                  : '{\n  "type": "service_account",\n  "project_id": "...",\n  "private_key": "...",\n  "client_email": "...",\n  ...\n}'
+              }
+              className="w-full rounded-md border border-border bg-background px-3 py-2.5 font-mono text-[11px] leading-relaxed text-foreground outline-none placeholder:text-muted-foreground/40 focus:border-accent-blue/50"
+              spellCheck={false}
+              autoComplete="off"
+            />
+          </div>
+          <div className="mt-4 rounded-md border border-accent-blue/25 bg-accent-blue/5 px-3 py-2.5 text-[11px] text-muted-foreground">
+            <p className="font-medium text-foreground">Note</p>
+            <p className="mt-1">
+              Connection + Test validate your GCP identity. Full Google Cloud
+              misconfig checks use this profile as the connector; AWS remains the
+              primary deep scan engine today. Demo mode still works for simulated
+              findings on either provider.
+            </p>
           </div>
         </section>
       )}
 
-      {/* Guidance */}
+      {/* Demo for either provider */}
+      {authMode === "simulate" && isAws && (
+        <div className="rounded-md border border-accent-blue/30 bg-accent-blue/5 px-4 py-3 text-[11px] text-accent-blue">
+          Demo mode selected — no live AWS credentials required. Launch scan to
+          use simulated misconfigurations.
+        </div>
+      )}
+
       {settings?.guidance && settings.guidance.length > 0 && (
         <section className="space-y-2">
           {settings.guidance.map((g, i) => (
@@ -644,43 +779,6 @@ export function SettingsTab() {
           ))}
         </section>
       )}
-
-      {/* How to create keys */}
-      <section className="rounded-lg border border-border bg-panel p-5">
-        <h4 className="mb-3 font-mono text-xs font-bold tracking-[0.14em] text-foreground">
-          HOW TO CREATE AWS ACCESS KEYS
-        </h4>
-        <ol className="list-decimal space-y-2 pl-5 text-xs leading-relaxed text-muted-foreground">
-          <li>
-            Sign in to the{" "}
-            <span className="text-foreground">AWS Management Console</span>.
-          </li>
-          <li>
-            Open <span className="text-foreground">IAM → Users</span> and select
-            (or create) a dedicated user such as{" "}
-            <span className="font-mono text-foreground">vaultscan-connector</span>.
-          </li>
-          <li>
-            Open <span className="text-foreground">Security credentials</span> →{" "}
-            <span className="text-foreground">Create access key</span>. Choose
-            “Application running outside AWS” or “CLI”.
-          </li>
-          <li>
-            Copy the <span className="text-foreground">Access key ID</span> and{" "}
-            <span className="text-foreground">Secret access key</span> into the
-            fields above. The secret is shown only once.
-          </li>
-          <li>
-            {needsRole
-              ? "Ensure the role’s trust policy allows this user (or account) to assume it, and grant the user sts:AssumeRole on that Role ARN."
-              : "Attach least-privilege read policies (e.g. SecurityAudit) to the user."}
-          </li>
-          <li>
-            Click <span className="text-foreground">Test connection</span>, then{" "}
-            <span className="text-foreground">Save</span>.
-          </li>
-        </ol>
-      </section>
 
       {/* Actions */}
       <div className="flex flex-wrap items-center gap-3 border-t border-border pt-4">

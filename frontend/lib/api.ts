@@ -93,9 +93,11 @@ export interface PublicConfig {
   grok_model?: string | null;
 }
 
+export type CloudProvider = "aws" | "gcp";
+
 export interface ConnectionSettings {
   connection_name: string;
-  provider: string;
+  provider: CloudProvider | string;
   auth_mode: ScanMode;
   role_arn: string;
   external_id: string;
@@ -105,6 +107,9 @@ export interface ConnectionSettings {
   has_access_key: boolean;
   has_secret_key: boolean;
   has_session_token: boolean;
+  gcp_project_id?: string;
+  gcp_service_account_email_masked?: string | null;
+  has_gcp_service_account?: boolean;
   credentials_configured: boolean;
   updated_at: string | null;
   last_tested_at: string | null;
@@ -118,6 +123,7 @@ export interface ConnectionSettings {
 
 export interface ConnectionSettingsUpdate {
   connection_name?: string;
+  provider?: CloudProvider;
   auth_mode?: ScanMode;
   role_arn?: string;
   external_id?: string;
@@ -126,6 +132,9 @@ export interface ConnectionSettingsUpdate {
   access_key_id?: string;
   secret_access_key?: string;
   session_token?: string;
+  gcp_project_id?: string;
+  gcp_service_account_email?: string;
+  gcp_service_account_json?: string;
   clear_credentials?: boolean;
   clear_session_token?: boolean;
 }

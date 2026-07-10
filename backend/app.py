@@ -73,6 +73,7 @@ class SummarizeRequest(BaseModel):
 
 class ConnectionSettingsUpdate(BaseModel):
     connection_name: str | None = None
+    provider: Literal["aws", "gcp"] | None = None
     auth_mode: Literal["assume_role", "direct", "simulate"] | None = None
     role_arn: str | None = None
     external_id: str | None = None
@@ -89,6 +90,12 @@ class ConnectionSettingsUpdate(BaseModel):
     session_token: str | None = Field(
         default=None,
         description="Optional temporary session token. Leave empty to keep existing.",
+    )
+    gcp_project_id: str | None = None
+    gcp_service_account_email: str | None = None
+    gcp_service_account_json: str | None = Field(
+        default=None,
+        description="Full GCP service account JSON. Leave empty to keep existing.",
     )
     clear_credentials: bool = False
     clear_session_token: bool = False
@@ -243,9 +250,38 @@ def put_connection_settings(body: ConnectionSettingsUpdate):
 
 @app.post("/api/settings/connection/test")
 def test_connection_settings():
-    """Validate saved credentials by calling STS (AssumeRole or GetCallerIdentity)."""
+    """Validate saved credentials (AWS STS / GCP service account)."""
     rt = connection_store.resolve_runtime()
+    provider = rt.get("provider") or "aws"
     mode = rt["auth_mode"]
+
+    if provider == "gcp" and mode != "simulate":
+        ok, msg, project = connection_store.test_gcp_connection()
+        connection_store.record_test_result(
+            ok=ok,
+            message=msg,
+            account_id=project,
+            caller_arn=rt.get("gcp_service_account_email") or None,
+        )
+        return {
+            "ok": ok,
+            "message": msg,
+            "connection": {
+                "connected": ok,
+                "mode": mode,
+                "account_id": project,
+                "arn": rt.get("gcp_service_account_email"),
+                "role_arn": None,
+                "region": rt.get("region"),
+                "connection_name": rt.get("connection_name"),
+                "error": None if ok else msg,
+                "hint": None
+                if ok
+                else "Check Project ID and paste a full service account JSON key.",
+            },
+            "settings": connection_store.public_view(),
+        }
+
     info = probe_connection(
         mode=mode,
         role_arn=rt.get("role_arn"),
@@ -254,7 +290,7 @@ def test_connection_settings():
     )
     ok = info.error is None
     if mode == "simulate":
-        msg = "Demo mode is active — no live AWS connection is used."
+        msg = "Demo mode is active — no live cloud connection is used."
         ok = True
     elif ok:
         msg = (

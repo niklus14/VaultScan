@@ -1,9 +1,7 @@
 """
 Runtime cloud-connection settings for VaultScan.
 
-Credentials entered in the product Settings UI are stored server-side only
-(data/connection.json). Secrets are never returned in full via the API —
-only presence flags and masked previews.
+Supports AWS and Google Cloud profiles. Secrets stay server-side only.
 """
 from __future__ import annotations
 
@@ -21,7 +19,6 @@ _DATA_DIR = Path(__file__).resolve().parent / "data"
 _STORE_PATH = _DATA_DIR / "connection.json"
 _LOCK = threading.Lock()
 
-# Placeholders the UI may send when the user did not change a secret field
 _SECRET_PLACEHOLDERS = {"", "••••••••", "********", "unchanged", "__UNCHANGED__"}
 
 
@@ -31,21 +28,24 @@ def _utcnow() -> str:
 
 def _default_profile() -> dict[str, Any]:
     return {
-        "connection_name": "Primary AWS Account",
-        "provider": "aws",
-        # assume_role | direct | simulate
+        "connection_name": "Primary Cloud Account",
+        "provider": "aws",  # aws | gcp
+        # AWS auth: assume_role | direct | simulate
         "auth_mode": "assume_role",
         "role_arn": settings.aws_role_arn,
         "external_id": settings.aws_external_id or "",
         "region": settings.aws_region or "us-east-1",
         "session_name": settings.aws_session_name or "VaultScanCSPM",
-        # Base identity used to call STS (or direct scan)
         "access_key_id": settings.aws_access_key_id or "",
         "secret_access_key": settings.aws_secret_access_key or "",
         "session_token": settings.aws_session_token or "",
+        # Google Cloud
+        "gcp_project_id": "",
+        "gcp_service_account_email": "",
+        "gcp_service_account_json": "",
         "updated_at": None,
         "last_tested_at": None,
-        "last_test_status": None,  # ok | failed | never
+        "last_test_status": None,
         "last_test_message": None,
         "last_account_id": None,
         "last_caller_arn": None,
@@ -56,13 +56,11 @@ def _ensure_store() -> dict[str, Any]:
     _DATA_DIR.mkdir(parents=True, exist_ok=True)
     if not _STORE_PATH.exists():
         profile = _default_profile()
-        # Prefer env defaults on first boot
         _write_raw(profile)
         return profile
     try:
         with _STORE_PATH.open("r", encoding="utf-8") as fh:
             data = json.load(fh)
-        # Merge missing keys from defaults
         base = _default_profile()
         base.update({k: v for k, v in data.items() if v is not None})
         return base
@@ -79,7 +77,6 @@ def _write_raw(profile: dict[str, Any]) -> None:
         json.dump(profile, fh, indent=2)
         fh.write("\n")
     os.replace(tmp, _STORE_PATH)
-    # Restrict permissions on Unix
     try:
         os.chmod(_STORE_PATH, 0o600)
     except OSError:
@@ -99,15 +96,33 @@ def mask_access_key(key: str) -> str | None:
     return f"{key[:4]}••••••••{key[-4:]}"
 
 
+def mask_email(email: str) -> str | None:
+    if not email or "@" not in email:
+        return email or None
+    name, domain = email.split("@", 1)
+    if len(name) <= 2:
+        return f"••@{domain}"
+    return f"{name[:2]}•••@{domain}"
+
+
 def public_view(profile: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Safe payload for the Settings UI — never includes secret material."""
     p = profile or get_profile()
+    provider = (p.get("provider") or "aws").lower()
     has_key = bool(p.get("access_key_id"))
     has_secret = bool(p.get("secret_access_key"))
     has_token = bool(p.get("session_token"))
+    has_sa = bool(p.get("gcp_service_account_json"))
+    sa_email = p.get("gcp_service_account_email") or ""
+    # Try extract email from stored JSON for display
+    if not sa_email and has_sa:
+        try:
+            sa_email = json.loads(p["gcp_service_account_json"]).get("client_email") or ""
+        except (json.JSONDecodeError, TypeError, KeyError):
+            pass
+
     return {
-        "connection_name": p.get("connection_name") or "Primary AWS Account",
-        "provider": p.get("provider") or "aws",
+        "connection_name": p.get("connection_name") or "Primary Cloud Account",
+        "provider": provider,
         "auth_mode": p.get("auth_mode") or "assume_role",
         "role_arn": p.get("role_arn") or "",
         "external_id": p.get("external_id") or "",
@@ -117,7 +132,10 @@ def public_view(profile: dict[str, Any] | None = None) -> dict[str, Any]:
         "has_access_key": has_key,
         "has_secret_key": has_secret,
         "has_session_token": has_token,
-        "credentials_configured": has_key and has_secret,
+        "gcp_project_id": p.get("gcp_project_id") or "",
+        "gcp_service_account_email_masked": mask_email(sa_email),
+        "has_gcp_service_account": has_sa,
+        "credentials_configured": _credentials_configured(p),
         "updated_at": p.get("updated_at"),
         "last_tested_at": p.get("last_tested_at"),
         "last_test_status": p.get("last_test_status") or "never",
@@ -129,13 +147,25 @@ def public_view(profile: dict[str, Any] | None = None) -> dict[str, Any]:
     }
 
 
+def _credentials_configured(p: dict[str, Any]) -> bool:
+    provider = (p.get("provider") or "aws").lower()
+    if provider == "gcp":
+        return bool(p.get("gcp_project_id") and p.get("gcp_service_account_json"))
+    if (p.get("auth_mode") or "") == "simulate":
+        return True
+    return bool(p.get("access_key_id") and p.get("secret_access_key"))
+
+
 def _ready_to_scan(p: dict[str, Any]) -> bool:
+    provider = (p.get("provider") or "aws").lower()
     mode = p.get("auth_mode") or "assume_role"
     if mode == "simulate":
         return True
+    if provider == "gcp":
+        # Connection can be saved; full GCP engine is staged
+        return bool(p.get("gcp_project_id") and p.get("gcp_service_account_json"))
     if mode == "direct":
         return bool(p.get("access_key_id") and p.get("secret_access_key"))
-    # assume_role
     return bool(
         p.get("role_arn")
         and p.get("access_key_id")
@@ -144,17 +174,57 @@ def _ready_to_scan(p: dict[str, Any]) -> bool:
 
 
 def _guidance(p: dict[str, Any]) -> list[dict[str, str]]:
+    provider = (p.get("provider") or "aws").lower()
     mode = p.get("auth_mode") or "assume_role"
     tips: list[dict[str, str]] = []
+
     if mode == "simulate":
         tips.append(
             {
                 "level": "info",
-                "text": "Demo mode uses a simulated cloud. No real AWS credentials are required.",
+                "text": "Demo mode uses a simulated cloud. No live cloud credentials are required.",
             }
         )
         return tips
 
+    if provider == "gcp":
+        if not p.get("gcp_project_id"):
+            tips.append(
+                {
+                    "level": "warning",
+                    "text": "Enter your Google Cloud Project ID (e.g. my-project-123).",
+                }
+            )
+        if not p.get("gcp_service_account_json"):
+            tips.append(
+                {
+                    "level": "warning",
+                    "text": (
+                        "Paste a Service Account JSON key. Create it in GCP Console → "
+                        "IAM & Admin → Service Accounts → Keys → Add key → JSON. "
+                        "Grant Viewer / Security Reviewer style roles for read-only scans."
+                    ),
+                }
+            )
+        else:
+            tips.append(
+                {
+                    "level": "info",
+                    "text": (
+                        "GCP connection is stored. VaultScan validates the service account on "
+                        "Test Connection. Full GCP misconfig scanning expands from this profile."
+                    ),
+                }
+            )
+        tips.append(
+            {
+                "level": "info",
+                "text": "Secrets stay on the VaultScan server and are never returned in full.",
+            }
+        )
+        return tips
+
+    # AWS
     if not p.get("access_key_id") or not p.get("secret_access_key"):
         tips.append(
             {
@@ -165,7 +235,6 @@ def _guidance(p: dict[str, Any]) -> list[dict[str, str]]:
                 ),
             }
         )
-
     if mode == "assume_role" and not p.get("role_arn"):
         tips.append(
             {
@@ -173,46 +242,38 @@ def _guidance(p: dict[str, Any]) -> list[dict[str, str]]:
                 "text": "Enter the IAM Role ARN VaultScan should assume in the target account.",
             }
         )
-
     if mode == "assume_role" and p.get("access_key_id") and p.get("role_arn"):
         tips.append(
             {
                 "level": "info",
                 "text": (
-                    "Recommended setup: the Access Key only needs permission to call "
-                    "sts:AssumeRole. Scanning runs with the Role’s short-lived credentials."
+                    "Recommended: Access Key only needs sts:AssumeRole. "
+                    "Scanning uses the role’s short-lived credentials."
                 ),
             }
         )
-
     if mode == "direct":
         tips.append(
             {
                 "level": "warning",
-                "text": (
-                    "Direct mode scans with the Access Key itself. Prefer Role Assumption "
-                    "for production accounts."
-                ),
+                "text": "Direct mode scans with the Access Key itself. Prefer Role Assumption for production.",
             }
         )
-
     tips.append(
         {
             "level": "info",
             "text": (
-                "Secrets are stored only on the VaultScan server and never shown again in full. "
-                "Leave a secret field blank when saving if you do not want to replace it."
+                "Secrets are stored only on the VaultScan server. "
+                "Leave secret fields blank when saving to keep existing values."
             ),
         }
     )
     return tips
 
 
-def validate_role_arn(role_arn: str, auth_mode: str) -> str | None:
-    """
-    Return an error message if Role ARN is invalid for assume_role mode.
-    IAM *user* ARNs cannot be assumed with sts:AssumeRole.
-    """
+def validate_role_arn(role_arn: str, auth_mode: str, provider: str = "aws") -> str | None:
+    if (provider or "aws").lower() != "aws":
+        return None
     arn = (role_arn or "").strip()
     if auth_mode != "assume_role":
         return None
@@ -220,28 +281,15 @@ def validate_role_arn(role_arn: str, auth_mode: str) -> str | None:
         return "Role ARN is required for IAM Role assumption mode."
     if ":user/" in arn:
         return (
-            "You entered an IAM *User* ARN (…:user/…), not a Role ARN. "
-            "sts:AssumeRole only works on roles (…:role/…). "
-            "Either paste a Role ARN such as "
-            "arn:aws:iam::850919910218:role/demo-test-vulnerable-ec2-role, "
-            "or switch Connection Method to “Access keys (direct)” if you only have a user."
+            "You entered an IAM User ARN (…:user/…), not a Role ARN. "
+            "Use …:role/RoleName or switch to Access keys (direct)."
         )
     if not arn.startswith("arn:aws:iam::") or ":role/" not in arn:
-        return (
-            "Role ARN must look like "
-            "arn:aws:iam::ACCOUNT_ID:role/RoleName "
-            "(must contain :role/, not :user/)."
-        )
+        return "Role ARN must look like arn:aws:iam::ACCOUNT_ID:role/RoleName"
     return None
 
 
 def update_profile(payload: dict[str, Any]) -> dict[str, Any]:
-    """
-    Merge Settings form payload into stored profile.
-
-    Secret fields: omit or send empty / placeholder to keep the previous value.
-    Send clear_credentials=true to wipe access keys.
-    """
     with _LOCK:
         current = _ensure_store()
 
@@ -249,6 +297,8 @@ def update_profile(payload: dict[str, Any]) -> dict[str, Any]:
             current["access_key_id"] = ""
             current["secret_access_key"] = ""
             current["session_token"] = ""
+            current["gcp_service_account_json"] = ""
+            current["gcp_service_account_email"] = ""
 
         for key in (
             "connection_name",
@@ -258,17 +308,24 @@ def update_profile(payload: dict[str, Any]) -> dict[str, Any]:
             "external_id",
             "region",
             "session_name",
+            "gcp_project_id",
+            "gcp_service_account_email",
         ):
             if key in payload and payload[key] is not None:
                 current[key] = str(payload[key]).strip()
 
-        # Validate role ARN after merge so we see the effective auth_mode + arn
+        provider = (current.get("provider") or "aws").lower()
+        if provider not in ("aws", "gcp"):
+            raise ValueError("Provider must be 'aws' or 'gcp'.")
+        current["provider"] = provider
+
         mode = current.get("auth_mode") or "assume_role"
-        role_err = validate_role_arn(current.get("role_arn") or "", mode)
+        role_err = validate_role_arn(
+            current.get("role_arn") or "", mode, provider=provider
+        )
         if role_err:
             raise ValueError(role_err)
 
-        # Access key id can be updated when a non-placeholder value is provided
         if "access_key_id" in payload:
             val = (payload.get("access_key_id") or "").strip()
             if val and val not in _SECRET_PLACEHOLDERS and "•" not in val:
@@ -285,6 +342,24 @@ def update_profile(payload: dict[str, Any]) -> dict[str, Any]:
                 current["session_token"] = val
             elif payload.get("clear_session_token"):
                 current["session_token"] = ""
+
+        if "gcp_service_account_json" in payload:
+            raw = (payload.get("gcp_service_account_json") or "").strip()
+            if raw and raw not in _SECRET_PLACEHOLDERS and "•" not in raw[:8]:
+                # Validate JSON shape
+                try:
+                    doc = json.loads(raw)
+                except json.JSONDecodeError as exc:
+                    raise ValueError(f"Service account JSON is invalid: {exc}") from exc
+                if not isinstance(doc, dict) or "client_email" not in doc:
+                    raise ValueError(
+                        "Service account JSON must include client_email "
+                        "(download the full key file from GCP Console)."
+                    )
+                current["gcp_service_account_json"] = raw
+                current["gcp_service_account_email"] = doc.get("client_email") or ""
+                if not current.get("gcp_project_id") and doc.get("project_id"):
+                    current["gcp_project_id"] = doc["project_id"]
 
         current["updated_at"] = _utcnow()
         _write_raw(current)
@@ -312,9 +387,9 @@ def record_test_result(
 
 
 def resolve_runtime() -> dict[str, Any]:
-    """Values used by the scanner / aws_client (includes secrets — internal only)."""
     p = get_profile()
     return {
+        "provider": (p.get("provider") or "aws").lower(),
         "auth_mode": p.get("auth_mode") or "assume_role",
         "role_arn": p.get("role_arn") or settings.aws_role_arn,
         "external_id": p.get("external_id") or "",
@@ -323,5 +398,57 @@ def resolve_runtime() -> dict[str, Any]:
         "access_key_id": p.get("access_key_id") or "",
         "secret_access_key": p.get("secret_access_key") or "",
         "session_token": p.get("session_token") or "",
-        "connection_name": p.get("connection_name") or "Primary AWS Account",
+        "connection_name": p.get("connection_name") or "Primary Cloud Account",
+        "gcp_project_id": p.get("gcp_project_id") or "",
+        "gcp_service_account_json": p.get("gcp_service_account_json") or "",
+        "gcp_service_account_email": p.get("gcp_service_account_email") or "",
     }
+
+
+def test_gcp_connection(profile: dict[str, Any] | None = None) -> tuple[bool, str, str | None]:
+    """
+    Validate GCP service account JSON.
+    Returns (ok, message, project_or_email).
+    """
+    p = profile or get_profile()
+    project = (p.get("gcp_project_id") or "").strip()
+    raw = (p.get("gcp_service_account_json") or "").strip()
+    if not project:
+        return False, "GCP Project ID is required.", None
+    if not raw:
+        return False, "Service Account JSON key is required.", None
+    try:
+        doc = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        return False, f"Invalid service account JSON: {exc}", None
+    email = doc.get("client_email")
+    pid = doc.get("project_id") or project
+    if not email:
+        return False, "JSON key missing client_email.", None
+    if not doc.get("private_key"):
+        return False, "JSON key missing private_key.", None
+
+    # Optional live token if google-auth installed
+    try:
+        from google.oauth2 import service_account
+        from google.auth.transport.requests import Request
+
+        creds = service_account.Credentials.from_service_account_info(
+            doc,
+            scopes=["https://www.googleapis.com/auth/cloud-platform.read-only"],
+        )
+        creds.refresh(Request())
+        return (
+            True,
+            f"Google Cloud credentials valid for {email} (project {pid}).",
+            pid,
+        )
+    except ImportError:
+        return (
+            True,
+            f"Service account JSON looks valid ({email}, project {pid}). "
+            "Install google-auth for live token verification.",
+            pid,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return False, f"GCP credential test failed: {exc}", None
