@@ -4,8 +4,7 @@ import { useEffect, useState } from "react";
 import {
   LayoutGrid,
   ShieldAlert,
-  ClipboardCheck,
-  Wrench,
+  GitBranch,
   History,
   FileText,
   Settings2,
@@ -14,9 +13,8 @@ import { Sidebar } from "./sidebar";
 import { ScanReport } from "./scan-report";
 import { AiAssistant } from "./ai-assistant";
 import { OverviewTab } from "./tabs/overview";
-import { VulnerabilityFeedTab } from "./tabs/vulnerability-feed";
-import { ComplianceRegistryTab } from "./tabs/compliance-registry";
-import { RemediationHubTab } from "./tabs/remediation-hub";
+import { FindingsTab } from "./tabs/findings";
+import { AttackPathsTab } from "./tabs/attack-paths";
 import { ScanHistoryTab } from "./tabs/scan-history";
 import { SettingsTab } from "./tabs/settings";
 import { type TabId } from "./data";
@@ -27,9 +25,8 @@ const pageMeta: Record<
   { title: string; icon: React.ElementType }
 > = {
   overview: { title: "OVERVIEW", icon: LayoutGrid },
-  vulnerability: { title: "VULNERABILITY FEED", icon: ShieldAlert },
-  compliance: { title: "COMPLIANCE REGISTRY", icon: ClipboardCheck },
-  remediation: { title: "REMEDIATION HUB", icon: Wrench },
+  findings: { title: "FINDINGS", icon: ShieldAlert },
+  attackpaths: { title: "ATTACK PATHS", icon: GitBranch },
   history: { title: "SCAN HISTORY", icon: History },
   settings: { title: "SETTINGS", icon: Settings2 },
 };
@@ -123,9 +120,8 @@ export function Dashboard() {
           }
         >
           {active === "overview" && <OverviewTab />}
-          {active === "vulnerability" && <VulnerabilityFeedTab />}
-          {active === "compliance" && <ComplianceRegistryTab />}
-          {active === "remediation" && <RemediationHubTab />}
+          {active === "findings" && <FindingsTab />}
+          {active === "attackpaths" && <AttackPathsTab />}
           {active === "history" && <ScanHistoryTab />}
           {active === "settings" && <SettingsTab />}
         </div>

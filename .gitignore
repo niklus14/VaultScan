@@ -51,3 +51,4 @@ vaultscan_report.json
 *.pdf
 !docs/VaultScan_How_Detection_Works.pdf
 !docs/misconflist.pdf
+!docs/lastchanges.pdf

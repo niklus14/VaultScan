@@ -139,6 +139,49 @@ export function OverviewTab() {
         </StatCard>
       </div>
 
+      {/* Compact compliance strip (replaces dedicated Compliance tab) */}
+      {compliance.length > 0 && (
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+          {compliance.map((c) => {
+            const pct = c.total
+              ? Math.round((c.passed / c.total) * 100)
+              : 0;
+            return (
+              <div
+                key={c.name}
+                className={cn(
+                  "rounded-lg border px-4 py-3",
+                  c.status === "PASSING"
+                    ? "border-success/25 bg-success/5"
+                    : "border-danger/25 bg-danger/5",
+                )}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <p className="truncate text-xs font-semibold text-foreground">
+                    {c.name}
+                  </p>
+                  <span
+                    className={cn(
+                      "shrink-0 font-mono text-[10px] font-bold",
+                      c.status === "PASSING" ? "text-success" : "text-danger",
+                    )}
+                  >
+                    {c.status}
+                  </span>
+                </div>
+                <p className="mt-1 font-mono text-lg font-bold text-foreground">
+                  {pct}
+                  <span className="text-sm text-muted-foreground">%</span>
+                </p>
+                <p className="font-mono text-[10px] text-muted-foreground">
+                  {c.passed}/{c.total} controls · {c.version}
+                </p>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       {/* Chart + infra */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <div className="rounded-lg border border-border bg-panel p-5 lg:col-span-2">

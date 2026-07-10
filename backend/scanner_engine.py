@@ -14,6 +14,7 @@ from typing import Any
 import boto3
 from botocore.exceptions import ClientError
 
+from attack_paths import build_attack_paths
 from aws_client import AwsConnectionInfo, get_scan_session
 
 
@@ -919,6 +920,7 @@ def _package_result(
         "vulnerabilities": vulnerabilities,
         "compliance": build_compliance(findings),
         "remediation": build_remediation(findings),
+        "attack_paths": build_attack_paths(findings),
         "audit_stream": build_audit_stream(findings, meta),
         "infra_status": [
             {

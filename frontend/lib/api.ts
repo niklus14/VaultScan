@@ -57,6 +57,24 @@ export interface ScanResult {
     state: "online" | "syncing" | "error" | string;
   }>;
   posture_point?: { t: string; score: number };
+  attack_paths?: Array<{
+    id: string;
+    name: string;
+    outcome: string;
+    severity: string;
+    likelihood: string;
+    impact: string;
+    steps: Array<{
+      role: string;
+      rule_id?: string;
+      severity?: string;
+      service?: string;
+      resource?: string;
+      title?: string;
+      remediation?: string;
+    }>;
+    break_chain: string[];
+  }>;
 }
 
 export interface HistoryItem {

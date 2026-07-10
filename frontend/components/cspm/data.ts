@@ -3,11 +3,10 @@ export type LogLevel = "INF" | "MED" | "CRIT";
 
 export const NAV_ITEMS = [
   { id: "overview", label: "OVERVIEW", code: "01" },
-  { id: "vulnerability", label: "VULNERABILITY FEED", code: "02" },
-  { id: "compliance", label: "COMPLIANCE REGISTRY", code: "03" },
-  { id: "remediation", label: "REMEDIATION HUB", code: "04" },
-  { id: "history", label: "SCAN HISTORY", code: "05" },
-  { id: "settings", label: "SETTINGS", code: "06" },
+  { id: "findings", label: "FINDINGS", code: "02" },
+  { id: "attackpaths", label: "ATTACK PATHS", code: "03" },
+  { id: "history", label: "SCAN HISTORY", code: "04" },
+  { id: "settings", label: "SETTINGS", code: "05" },
 ] as const;
 
 export type TabId = (typeof NAV_ITEMS)[number]["id"];
