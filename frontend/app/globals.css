@@ -99,33 +99,70 @@
   100% { transform: translateY(400%); }
 }
 
-/* Cloud Assistant FAB — gentle idle turn + hover spin (Creative Cloud vibe) */
+/* Cloud Assistant FAB — turn, blink, smile, speech bubble */
 @keyframes cloud-robot-idle {
-  0%, 100% { transform: rotate(0deg); }
-  40% { transform: rotate(-8deg); }
-  70% { transform: rotate(10deg); }
+  0%, 100% { transform: rotate(0deg) translateY(0); }
+  25% { transform: rotate(-10deg) translateY(-2px); }
+  50% { transform: rotate(0deg) translateY(0); }
+  75% { transform: rotate(12deg) translateY(-1px); }
 }
 @keyframes cloud-robot-hover-spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
 }
+@keyframes ca-blink {
+  0%, 42%, 46%, 100% { transform: scaleY(1); }
+  44% { transform: scaleY(0.08); }
+}
+@keyframes ca-smile {
+  0%, 100% { transform: translateY(0) scaleY(1); }
+  50% { transform: translateY(1px) scaleY(1.15); }
+}
+@keyframes ca-antenna {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-1.5px); }
+}
+@keyframes ca-bubble-in {
+  0% { opacity: 0; transform: translateX(12px) scale(0.9); }
+  12% { opacity: 1; transform: translateX(0) scale(1); }
+  82% { opacity: 1; transform: translateX(0) scale(1); }
+  100% { opacity: 0; transform: translateX(8px) scale(0.96); }
+}
 .cloud-assistant-fab:not([aria-expanded="true"]) .cloud-robot-spin {
-  animation: cloud-robot-idle 3.2s ease-in-out infinite;
+  animation: cloud-robot-idle 3.6s ease-in-out infinite;
 }
 .cloud-assistant-fab:not([aria-expanded="true"]):hover .cloud-robot-spin {
-  animation: cloud-robot-hover-spin 0.65s ease-out;
+  animation: cloud-robot-hover-spin 0.7s ease-out;
+}
+.cloud-assistant-fab .ca-eyes {
+  transform-origin: 32px 31px;
+  animation: ca-blink 3.8s ease-in-out infinite;
+}
+.cloud-assistant-fab .ca-eye {
+  transform-origin: center;
+  transform-box: fill-box;
+}
+.cloud-assistant-fab .ca-smile {
+  animation: ca-smile 2.8s ease-in-out infinite;
+}
+.cloud-assistant-fab .ca-antenna-dot {
+  transform-origin: 32px 8px;
+  animation: ca-antenna 2s ease-in-out infinite;
 }
 .cloud-assistant-fab {
   box-shadow:
-    0 0 0 1px rgba(56, 116, 255, 0.2),
-    0 8px 28px -6px rgba(56, 116, 255, 0.45),
-    0 4px 12px rgba(0, 0, 0, 0.4);
+    0 0 0 1px rgba(56, 116, 255, 0.25),
+    0 10px 32px -6px rgba(56, 116, 255, 0.5),
+    0 4px 14px rgba(0, 0, 0, 0.45);
 }
 .cloud-assistant-fab:hover {
-  transform: scale(1.06);
+  transform: scale(1.08);
 }
 .cloud-assistant-fab:active {
   transform: scale(0.96);
+}
+.ca-speech-bubble {
+  animation: ca-bubble-in 4.2s ease-in-out forwards;
 }
 
 /* Google Cloud–style mark + revolving shields */

@@ -8,62 +8,81 @@ import { cn } from "@/lib/utils";
 
 type Msg = { role: "user" | "assistant"; content: string };
 
-/** Circular robot mark — Creative Cloud–style floating toggle */
+const HELP_BUBBLES = [
+  "Need a hand?",
+  "Do you need help?",
+  "Ask me about findings!",
+  "Want a risk summary?",
+  "I can explain attack paths",
+  "Stuck on a fix? Ask me",
+  "Ready when you are ✨",
+];
+
+/** Animated robot face — blinks, smiles, turns */
 function CloudRobotIcon({ className }: { className?: string }) {
   return (
     <svg
-      viewBox="0 0 48 48"
+      viewBox="0 0 64 64"
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
-      className={className}
+      className={cn("ca-robot-face", className)}
       aria-hidden
     >
       {/* Antenna */}
-      <circle cx="24" cy="6" r="2.5" fill="currentColor" />
+      <circle className="ca-antenna-dot" cx="32" cy="8" r="3.2" fill="currentColor" />
       <path
-        d="M24 8.5V13"
+        d="M32 11.5V18"
         stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-      />
-      {/* Head */}
-      <rect
-        x="10"
-        y="13"
-        width="28"
-        height="22"
-        rx="6"
-        stroke="currentColor"
-        strokeWidth="2.2"
-      />
-      {/* Eyes */}
-      <circle cx="18.5" cy="23" r="2.8" fill="currentColor" />
-      <circle cx="29.5" cy="23" r="2.8" fill="currentColor" />
-      {/* Mouth */}
-      <path
-        d="M17 30.5h14"
-        stroke="currentColor"
-        strokeWidth="2"
+        strokeWidth="2.4"
         strokeLinecap="round"
       />
       {/* Ears */}
       <path
-        d="M10 22H7.5a1.5 1.5 0 0 0 0 3H10"
+        d="M14 30H10a2 2 0 0 0 0 4h4"
         stroke="currentColor"
-        strokeWidth="2"
+        strokeWidth="2.4"
         strokeLinecap="round"
       />
       <path
-        d="M38 22h2.5a1.5 1.5 0 0 1 0 3H38"
+        d="M50 30h4a2 2 0 0 1 0 4h-4"
         stroke="currentColor"
-        strokeWidth="2"
+        strokeWidth="2.4"
         strokeLinecap="round"
+      />
+      {/* Head */}
+      <rect
+        x="14"
+        y="18"
+        width="36"
+        height="28"
+        rx="9"
+        stroke="currentColor"
+        strokeWidth="2.6"
+        fill="currentColor"
+        fillOpacity="0.08"
+      />
+      {/* Eyes — blink via CSS scaleY */}
+      <g className="ca-eyes">
+        <ellipse className="ca-eye" cx="25" cy="31" rx="4" ry="4.2" fill="currentColor" />
+        <ellipse className="ca-eye" cx="39" cy="31" rx="4" ry="4.2" fill="currentColor" />
+        {/* Shine dots */}
+        <circle cx="26.5" cy="29.5" r="1.1" fill="var(--background, #0b0c10)" className="ca-eye-shine" />
+        <circle cx="40.5" cy="29.5" r="1.1" fill="var(--background, #0b0c10)" className="ca-eye-shine" />
+      </g>
+      {/* Smile */}
+      <path
+        className="ca-smile"
+        d="M24 40.5c2.2 3.2 5.5 4.8 8 4.8s5.8-1.6 8-4.8"
+        stroke="currentColor"
+        strokeWidth="2.4"
+        strokeLinecap="round"
+        fill="none"
       />
       {/* Body hint */}
       <path
-        d="M18 35v4a6 6 0 0 0 12 0v-4"
+        d="M24 46v5a8 8 0 0 0 16 0v-5"
         stroke="currentColor"
-        strokeWidth="2"
+        strokeWidth="2.4"
         strokeLinecap="round"
       />
     </svg>
