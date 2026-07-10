@@ -49,4 +49,5 @@ vaultscan_report.json
 *.zip
 *.pptx
 *.pdf
+!docs/VaultScan_How_Detection_Works.pdf
 !docs/**/*.md

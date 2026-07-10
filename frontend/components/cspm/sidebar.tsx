@@ -180,26 +180,6 @@ export function Sidebar({
           )}
         </div>
 
-        {/* Bottom: same turning cloud, compact */}
-        <div className="shrink-0 border-t border-border p-3">
-          <div className="relative overflow-hidden rounded-xl border border-border bg-gradient-to-br from-[#12141c] via-panel-alt to-[#0d1528] px-2 py-2">
-            <div
-              className="pointer-events-none absolute inset-0 opacity-40"
-              style={{
-                background:
-                  "radial-gradient(circle at 50% 40%, rgba(56,116,255,0.35), transparent 65%)",
-              }}
-            />
-            <BrandCloud className="!h-[72px] scale-90" />
-            <div className="relative -mt-1 flex items-center justify-center gap-2 pb-1">
-              <span className="pulse-dot size-1.5 rounded-full bg-success" />
-              <span className="font-mono text-[9px] tracking-[0.2em] text-muted-foreground">
-                SECURE CLOUD
-              </span>
-            </div>
-          </div>
-        </div>
       </nav>
     </aside>
   );
-}
