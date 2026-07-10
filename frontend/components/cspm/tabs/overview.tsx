@@ -2,6 +2,7 @@
 
 import { ArrowDownRight, ArrowUpRight } from "lucide-react";
 import { PostureChart } from "../posture-chart";
+import { AuditStream } from "../audit-stream";
 import { useLiveData } from "@/lib/scan-store";
 import { cn } from "@/lib/utils";
 
@@ -46,16 +47,19 @@ export function OverviewTab() {
     const total = compliance.reduce((a, c) => a + c.total, 0);
     return total ? Math.round((passed / total) * 100) : 0;
   })();
-  const failingFrameworks = compliance.filter((c) => c.status === "FAILING").length;
+  const failingFrameworks = compliance.filter(
+    (c) => c.status === "FAILING",
+  ).length;
 
   return (
-    <div className="space-y-4">
+    <div className="flex min-h-full flex-col gap-4">
       {!isLive && (
         <div className="rounded-md border border-warning/30 bg-warning/5 px-4 py-2 font-mono text-[11px] text-warning">
           Showing design mock data — launch a scan to load live AWS findings.
         </div>
       )}
 
+      {/* KPI row */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         <StatCard title="POSTURE SCORE">
           <div className="flex items-end gap-2">
@@ -135,6 +139,7 @@ export function OverviewTab() {
         </StatCard>
       </div>
 
+      {/* Chart + infra */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <div className="rounded-lg border border-border bg-panel p-5 lg:col-span-2">
           <div className="mb-4 flex items-center justify-between">
@@ -184,6 +189,11 @@ export function OverviewTab() {
             ))}
           </div>
         </div>
+      </div>
+
+      {/* Full-width audit stream — fills remaining overview space */}
+      <div className="min-h-0 flex-1">
+        <AuditStream variant="panel" />
       </div>
     </div>
   );

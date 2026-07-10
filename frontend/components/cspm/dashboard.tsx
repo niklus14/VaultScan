@@ -12,7 +12,6 @@ import {
 } from "lucide-react";
 import { Sidebar } from "./sidebar";
 import { ScanReport } from "./scan-report";
-import { AuditStream } from "./audit-stream";
 import { AiAssistant } from "./ai-assistant";
 import { OverviewTab } from "./tabs/overview";
 import { VulnerabilityFeedTab } from "./tabs/vulnerability-feed";
