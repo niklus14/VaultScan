@@ -544,6 +544,7 @@ export function applyRemediation(body: {
     job: RemediateJob;
     rescan?: ScanResult | { error: string };
     message?: string;
+    session_mode?: string;
   }>("/api/remediate/apply", {
     method: "POST",
     body: JSON.stringify({

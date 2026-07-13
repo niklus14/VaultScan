@@ -49,7 +49,6 @@ export function RemediationHubTab() {
   const [jobs, setJobs] = useState<RemediateJob[]>([]);
   const [onlySafe, setOnlySafe] = useState(false);
   const [useAi, setUseAi] = useState(true);
-  const [allowWrite, setAllowWrite] = useState(false);
   const [phrase, setPhrase] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -128,7 +127,6 @@ export function RemediationHubTab() {
         confirm: true,
         confirm_phrase: needsDanger ? "APPLY" : phrase.trim() || undefined,
         only_safe: onlySafe,
-        // Demo always writes to local fixed-set; live AWS needs checkbox
         allow_write_with_scan_creds: true,
         rescan: true,
       });
@@ -136,22 +134,26 @@ export function RemediationHubTab() {
       const appliedN = (res.job.actions || []).filter(
         (a) => a.status === "applied",
       ).length;
-      const failedN = (res.job.actions || []).filter(
+      const failedActs = (res.job.actions || []).filter(
         (a) => a.status === "failed",
-      ).length;
+      );
+      const failedN = failedActs.length;
       const skippedN = (res.job.actions || []).filter(
         (a) => a.status === "skipped",
       ).length;
-      if (appliedN === 0) {
+      const firstFail = failedActs[0]?.error || "";
+      if (appliedN === 0 || res.ok === false) {
         setError(
-          `No fixes were applied (${skippedN} skipped, ${failedN} failed). ` +
-            "Uncheck “Only safe fixes”, use PLAN ALL AUTO-FIXES, or type APPLY for dangerous items. " +
-            "In live AWS, the role must allow the write API.",
+          res.message ||
+            `No AWS changes (${skippedN} skipped, ${failedN} failed). ${firstFail} ` +
+              "Your Access Key user needs write permissions — the scan Role is usually read-only.",
         );
+        setMessage(null);
       } else {
         setMessage(
-          `Applied ${appliedN} fix(es)${failedN ? `, ${failedN} failed` : ""}${skippedN ? `, ${skippedN} skipped` : ""}. ` +
-            "Re-scan completed — fixed misconfigs should be gone. Use Make as before to undo.",
+          res.message ||
+            `Applied ${appliedN} real AWS change(s)${failedN ? `, ${failedN} failed` : ""}. ` +
+              "Re-scan uses live AWS — fixed issues should disappear.",
         );
       }
       if (res.rescan && typeof res.rescan === "object" && "scan_id" in res.rescan) {
@@ -186,7 +188,7 @@ export function RemediationHubTab() {
         job_id: job.job_id,
         confirm: true,
         confirm_phrase: "ROLLBACK",
-        allow_write_with_scan_creds: allowWrite || mode === "simulate",
+        allow_write_with_scan_creds: true,
         rescan: true,
       });
       setJob(res.job);
@@ -271,19 +273,14 @@ export function RemediationHubTab() {
             />
             Cloud Assistant notes
           </label>
-          {mode !== "simulate" && (
-            <label className="flex items-center gap-2 font-mono text-[11px] text-warning">
-              <input
-                type="checkbox"
-                checked={allowWrite}
-                onChange={(e) => setAllowWrite(e.target.checked)}
-              />
-              Allow write with current scan credentials
-            </label>
-          )}
-          {mode === "simulate" && (
+          {mode === "simulate" ? (
             <span className="rounded border border-success/30 bg-success/10 px-2 py-1 font-mono text-[10px] text-success">
               DEMO MODE — apply/rollback are simulated
+            </span>
+          ) : (
+            <span className="rounded border border-warning/30 bg-warning/10 px-2 py-1 font-mono text-[10px] text-warning">
+              REAL AWS — Apply uses your Access Key user (not the read-only scan
+              role). That user needs write IAM (S3/EC2/IAM as needed).
             </span>
           )}
         </div>

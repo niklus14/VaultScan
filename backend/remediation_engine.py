@@ -886,16 +886,22 @@ def apply_one(
 
         a["status"] = "applied"
         a["error"] = None
-        a["preview"] = f"Applied {rid} on {resource}"
-        # Also suppress on next scan until rolled back (covers eventual consistency)
-        fid = str(a.get("finding_id") or "")
-        if fid:
-            mark_fixed(fid)
-        if rid and resource:
-            mark_fixed(f"{rid}:{resource}")
+        a["preview"] = f"Applied {rid} on {resource} in AWS"
+        # Do NOT mark_fixed for live AWS — next scan must reflect real account state.
+        # (Demo/simulate path marks fixed above.)
     except (ClientError, BotoCoreError, RuntimeError) as exc:
         a["status"] = "failed"
-        a["error"] = str(exc)
+        err = str(exc)
+        # Friendlier AccessDenied guidance
+        if "AccessDenied" in err or "UnauthorizedOperation" in err or "not authorized" in err.lower():
+            a["error"] = (
+                f"AWS denied this write ({rid} on {resource}). "
+                "Your Access Key / remediator role needs permission for this API "
+                "(e.g. s3:PutBucketPublicAccessBlock, ec2:RevokeSecurityGroupIngress, iam:DetachRolePolicy). "
+                f"Detail: {err}"
+            )
+        else:
+            a["error"] = err
     return a
 
 

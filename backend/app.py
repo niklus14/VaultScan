@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from aws_client import get_scan_session, probe_connection
+from aws_client import get_remediate_session, get_scan_session, probe_connection
 from config import settings
 import connection_store
 from grok_client import (
@@ -371,28 +371,45 @@ def api_scan(body: ScanRequest | None = None):
             external_id=external_id,
             region=region,
         )
-        # Hide findings successfully applied until "Make as before" (persisted)
-        fixed = remediation_engine.get_simulate_fixed()
-        if fixed:
-            findings = [
-                f
-                for f in (result.get("findings") or [])
-                if not remediation_engine.finding_is_fixed(f, fixed)
-            ]
-            result["findings"] = findings
-            result["total_findings"] = len(findings)
-            summary = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
-            for f in findings:
-                sev = f.get("severity")
-                if sev in summary:
-                    summary[sev] += 1
-            result["summary"] = summary
-            from scanner_engine import compute_score
+        # Demo only: hide findings applied in simulate until Make as before.
+        # Real AWS re-scan always reflects the live account (no fake suppress).
+        if mode == "simulate":
+            fixed = remediation_engine.get_simulate_fixed()
+            if fixed:
+                findings = [
+                    f
+                    for f in (result.get("findings") or [])
+                    if not remediation_engine.finding_is_fixed(f, fixed)
+                ]
+                result["findings"] = findings
+                result["total_findings"] = len(findings)
+                summary = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
+                for f in findings:
+                    sev = f.get("severity")
+                    if sev in summary:
+                        summary[sev] += 1
+                result["summary"] = summary
+                from scanner_engine import compute_score
 
-            result["score"] = compute_score(findings)
+                result["score"] = compute_score(findings)
+                result["vulnerabilities"] = [
+                    {
+                        "id": f.get("id") or f.get("resource"),
+                        "service": f.get("service"),
+                        "severity": f.get("severity"),
+                        "description": f.get("description"),
+                        "title": f.get("title"),
+                        "remediation": f.get("remediation"),
+                        "compliance": f.get("compliance"),
+                        "rule_id": f.get("rule_id"),
+                        "region": f.get("region"),
+                    }
+                    for f in findings
+                ]
+        else:
+            # Normalize vulnerability ids for Fix matching
             result["vulnerabilities"] = [
                 {
-                    # Keep stable finding id so Fix / suppress matching works
                     "id": f.get("id") or f.get("resource"),
                     "service": f.get("service"),
                     "severity": f.get("severity"),
@@ -403,9 +420,8 @@ def api_scan(body: ScanRequest | None = None):
                     "rule_id": f.get("rule_id"),
                     "region": f.get("region"),
                 }
-                for f in findings
+                for f in (result.get("findings") or [])
             ]
-            result["remediation_suppressed"] = len(fixed)
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
@@ -737,30 +753,13 @@ class RemediateRollbackRequest(BaseModel):
 
 
 def _remediate_session(allow_write_with_scan_creds: bool = False):
-    """Return (session|None, simulate: bool, error: str|None)."""
-    rt = connection_store.resolve_runtime()
-    mode = rt.get("auth_mode") or "simulate"
-    if mode == "simulate":
-        return None, True, None
-    if not allow_write_with_scan_creds:
-        return (
-            None,
-            False,
-            (
-                "Write remediations require allow_write_with_scan_creds=true "
-                "(scanner stays read-only by default). Demo mode can apply safely without AWS write."
-            ),
-        )
-    try:
-        session, _info = get_scan_session(
-            mode=mode,
-            role_arn=rt.get("role_arn"),
-            external_id=rt.get("external_id") or None,
-            region=rt.get("region"),
-        )
-        return session, False, None
-    except Exception as exc:  # noqa: BLE001
-        return None, False, str(exc)
+    """Return (session|None, simulate: bool, error: str|None, mode_label: str)."""
+    session, label, err = get_remediate_session(
+        allow_write=allow_write_with_scan_creds,
+    )
+    if label == "simulate":
+        return None, True, None, label
+    return session, False, err, label
 
 
 def _maybe_rescan(do_rescan: bool) -> dict[str, Any] | None:
@@ -821,52 +820,53 @@ async def remediate_plan(body: RemediatePlanRequest):
 
 @app.post("/api/remediate/dry-run")
 def remediate_dry_run(body: RemediateJobRequest):
-    session, simulate, err = _remediate_session(
-        allow_write_with_scan_creds=body.allow_write_with_scan_creds or False
+    session, simulate, err, label = _remediate_session(
+        allow_write_with_scan_creds=True
     )
-    # dry-run can preview without write even if no write flag (simulate path or preview only)
-    rt = connection_store.resolve_runtime()
-    if rt.get("auth_mode") == "simulate":
-        simulate = True
-        session = None
-    elif err and not simulate:
-        # still allow structural dry-run without AWS
+    if err and not simulate:
         session = None
         simulate = True
+        label = "preview_only"
     try:
         job = remediation_engine.dry_run_job(
             body.job_id, session, simulate=simulate
         )
     except KeyError:
         raise HTTPException(status_code=404, detail="Remediation job not found") from None
-    return {"ok": True, "job": job}
+    return {"ok": True, "job": job, "session_mode": label}
 
 
 @app.post("/api/remediate/apply")
 def remediate_apply(body: RemediateJobRequest):
-    """Apply planned fixes. Requires confirm=true. Dangerous needs phrase APPLY."""
+    """
+    Apply planned fixes against real AWS.
+
+    Uses base Access Keys from Settings (or remediator role) — NOT the
+    read-only scan AssumeRole, which cannot write.
+    """
     if not body.confirm:
         raise HTTPException(
             status_code=400,
             detail="Set confirm=true to apply remediations.",
         )
     confirm_dangerous = (body.confirm_phrase or "").strip().upper() == "APPLY"
-    session, simulate, err = _remediate_session(
-        allow_write_with_scan_creds=body.allow_write_with_scan_creds
+    session, simulate, err, label = _remediate_session(
+        allow_write_with_scan_creds=bool(body.allow_write_with_scan_creds)
+        if body.allow_write_with_scan_creds is not None
+        else True
     )
-    rt = connection_store.resolve_runtime()
-    if rt.get("auth_mode") == "simulate":
-        simulate = True
-        session = None
-        err = None
+    # Force allow when client forgot the flag but has real keys — Apply means write
+    if err and "allow_write" in (err or ""):
+        session, simulate, err, label = _remediate_session(allow_write_with_scan_creds=True)
     if err:
         raise HTTPException(
             status_code=403,
             detail={
                 "error": err,
                 "hint": (
-                    "Enable Demo mode to try apply safely, or set "
-                    "allow_write_with_scan_creds=true with a role that may write."
+                    "In Settings, save Access Key + Secret for an IAM user that can "
+                    "MODIFY the target resources. Scanning often uses a read-only role; "
+                    "Fixing Options uses your base keys for writes."
                 ),
             },
         )
@@ -881,24 +881,44 @@ def remediate_apply(body: RemediateJobRequest):
     except KeyError:
         raise HTTPException(status_code=404, detail="Remediation job not found") from None
 
+    applied = sum(1 for a in (job.get("actions") or []) if a.get("status") == "applied")
+    failed = [a for a in (job.get("actions") or []) if a.get("status") == "failed"]
+    skipped = sum(1 for a in (job.get("actions") or []) if a.get("status") == "skipped")
+
     rescan = None
-    score_after = None
     try:
         rescan = _maybe_rescan(body.rescan)
-        if rescan:
-            score_after = rescan.get("score")
-            job["score_after"] = score_after
+        if rescan and isinstance(rescan, dict) and "score" in rescan:
+            job["score_after"] = rescan.get("score")
             job = remediation_engine._upsert_job(job)
     except Exception as exc:  # noqa: BLE001
-        # apply succeeded; rescan optional
         rescan = {"error": str(exc)}
 
+    if applied == 0:
+        first_err = (
+            (failed[0].get("error") if failed else None)
+            or "All actions skipped — uncheck only-safe, type APPLY for dangerous items, "
+            "or grant write IAM on your Access Key user."
+        )
+        return {
+            "ok": False,
+            "job": job,
+            "rescan": rescan,
+            "session_mode": label,
+            "message": f"No AWS changes applied ({skipped} skipped, {len(failed)} failed). {first_err}",
+        }
+
+    fail_note = ""
+    if failed:
+        fail_note = f" {len(failed)} failed with AWS errors (often AccessDenied — see each action)."
     return {
         "ok": True,
         "job": job,
         "rescan": rescan,
+        "session_mode": label,
         "message": (
-            "Fixes applied. Use “Make as before” to roll back this job if needed."
+            f"Applied {applied} fix(es) via {label}.{fail_note} "
+            "Re-scan uses live AWS. Make as before undoes this job when snapshots exist."
         ),
     }
 
@@ -916,14 +936,9 @@ def remediate_rollback(body: RemediateRollbackRequest):
             status_code=400,
             detail='confirm_phrase must be "ROLLBACK" (or APPLY/RESTORE) to restore previous state.',
         )
-    session, simulate, err = _remediate_session(
-        allow_write_with_scan_creds=body.allow_write_with_scan_creds
+    session, simulate, err, label = _remediate_session(
+        allow_write_with_scan_creds=True
     )
-    rt = connection_store.resolve_runtime()
-    if rt.get("auth_mode") == "simulate":
-        simulate = True
-        session = None
-        err = None
     if err:
         raise HTTPException(status_code=403, detail={"error": err})
     try:
@@ -949,6 +964,7 @@ def remediate_rollback(body: RemediateRollbackRequest):
         "ok": True,
         "job": job,
         "rescan": rescan,
+        "session_mode": label,
         "message": "Restored previous configuration where snapshots allowed (make as before).",
     }
 
