@@ -99,22 +99,7 @@
   100% { transform: translateY(400%); }
 }
 
-/* Cloud Assistant FAB — gentle idle turn + hover spin (Creative Cloud vibe) */
-@keyframes cloud-robot-idle {
-  0%, 100% { transform: rotate(0deg); }
-  40% { transform: rotate(-8deg); }
-  70% { transform: rotate(10deg); }
-}
-@keyframes cloud-robot-hover-spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
-.cloud-assistant-fab:not([aria-expanded="true"]) .cloud-robot-spin {
-  animation: cloud-robot-idle 3.2s ease-in-out infinite;
-}
-.cloud-assistant-fab:not([aria-expanded="true"]):hover .cloud-robot-spin {
-  animation: cloud-robot-hover-spin 0.65s ease-out;
-}
+/* Cloud Assistant FAB — spin handled by framer-motion; keep glow + press scale */
 .cloud-assistant-fab {
   box-shadow:
     0 0 0 1px rgba(56, 116, 255, 0.2),

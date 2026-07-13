@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import { Send, Sparkles, X, Loader2 } from "lucide-react";
+import { motion } from "motion/react";
 import { chatWithGrok, summarizeScan } from "@/lib/api";
 import { useLiveData } from "@/lib/scan-store";
 import { cn } from "@/lib/utils";
@@ -313,7 +314,7 @@ export function AiAssistant() {
         </form>
       </aside>
 
-      {/* Top floating robot — Creative Cloud style */}
+      {/* Top floating robot — Y-axis turn-around (not flat spin) */}
       <button
         type="button"
         onClick={toggle}
@@ -321,30 +322,51 @@ export function AiAssistant() {
         aria-label={open ? "Close Cloud Assistant" : "Open Cloud Assistant"}
         title="Cloud Assistant"
         className={cn(
-          "cloud-assistant-fab fixed z-[60] flex size-14 items-center justify-center rounded-full border-2 shadow-xl transition-all duration-300",
-          "right-5 top-4 sm:right-6 sm:top-5",
+          "cloud-assistant-fab fixed z-[60] flex size-[5rem] items-center justify-center rounded-full border-2 shadow-xl transition-colors duration-300 sm:size-[5.25rem]",
+          "right-4 top-3 sm:right-5 sm:top-4",
           open
             ? "border-accent-blue bg-accent-blue text-background"
             : "border-accent-blue/50 bg-panel text-accent-blue hover:border-accent-blue hover:bg-accent-blue/15",
         )}
+        style={{ perspective: 900 }}
       >
-        <span
-          className={cn(
-            "cloud-robot-spin flex items-center justify-center transition-transform duration-500 ease-out",
-            open && "rotate-[180deg] scale-110",
-          )}
+        <motion.span
+          className="cloud-robot-spin flex items-center justify-center will-change-transform"
+          style={{ transformStyle: "preserve-3d" }}
+          animate={
+            open
+              ? { rotateY: 0, scale: 1.08 }
+              : {
+                  // Face → sweep around → face again (bottom-arrow “turn around”)
+                  rotateY: [0, 0, 90, 180, 270, 360, 360],
+                  scale: 1,
+                }
+          }
+          transition={
+            open
+              ? { type: "spring", stiffness: 260, damping: 22 }
+              : {
+                  rotateY: {
+                    duration: 5.2,
+                    times: [0, 0.28, 0.4, 0.52, 0.64, 0.76, 1],
+                    repeat: Infinity,
+                    ease: "easeInOut",
+                  },
+                  scale: { duration: 0.25 },
+                }
+          }
         >
-          <CloudRobotIcon className="size-7" />
-        </span>
+          <CloudRobotIcon className="size-12 sm:size-[3.35rem]" />
+        </motion.span>
         {/* Online pulse ring */}
         {!open && (
-          <span className="pointer-events-none absolute -right-0.5 -top-0.5 size-3 rounded-full border-2 border-panel bg-success" />
+          <span className="pointer-events-none absolute right-0.5 top-0.5 size-3.5 rounded-full border-2 border-panel bg-success" />
         )}
       </button>
 
       {/* Label chip under FAB when closed (desktop) */}
       {!open && (
-        <div className="pointer-events-none fixed right-5 top-[4.75rem] z-[60] hidden sm:right-6 sm:block">
+        <div className="pointer-events-none fixed right-4 top-[6.1rem] z-[60] hidden sm:right-5 sm:block">
           <span className="rounded-md border border-border bg-panel/95 px-2 py-1 font-mono text-[9px] font-bold tracking-[0.14em] text-muted-foreground shadow-lg backdrop-blur">
             CLOUD ASSISTANT
           </span>
