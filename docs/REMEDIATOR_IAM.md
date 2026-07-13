@@ -43,7 +43,7 @@ So the IAM **user** (or remediator role) must be allowed to **write** the APIs b
       "Resource": "*"
     },
     {
-      "Sid": "IamDetach",
+      "Sid": "IamDetachAndTrust",
       "Effect": "Allow",
       "Action": [
         "iam:ListAttachedUserPolicies",
@@ -54,6 +54,25 @@ So the IAM **user** (or remediator role) must be allowed to **write** the APIs b
         "iam:AttachRolePolicy",
         "iam:GetRole",
         "iam:UpdateAssumeRolePolicy"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "KmsSqsSecrets",
+      "Effect": "Allow",
+      "Action": [
+        "kms:ListKeys",
+        "kms:ListAliases",
+        "kms:DescribeKey",
+        "kms:GetKeyPolicy",
+        "kms:PutKeyPolicy",
+        "sqs:ListQueues",
+        "sqs:GetQueueAttributes",
+        "sqs:SetQueueAttributes",
+        "secretsmanager:ListSecrets",
+        "secretsmanager:GetResourcePolicy",
+        "secretsmanager:PutResourcePolicy",
+        "secretsmanager:DeleteResourcePolicy"
       ],
       "Resource": "*"
     },

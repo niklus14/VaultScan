@@ -600,6 +600,53 @@ def _snapshot_before(
             sgs = ec2.describe_security_groups(GroupIds=[gid]).get("SecurityGroups", [])
             if sgs:
                 snap["ip_permissions"] = sgs[0].get("IpPermissions", [])
+        elif rid == "IAM-TRUST-WILDCARD":
+            iam = session.client("iam")
+            role = iam.get_role(RoleName=resource)["Role"]
+            snap["assume_role_policy"] = role.get("AssumeRolePolicyDocument")
+            try:
+                snap["account_id"] = session.client("sts").get_caller_identity()[
+                    "Account"
+                ]
+            except ClientError:
+                snap["account_id"] = None
+        elif rid == "KMS-PUBLIC-POLICY":
+            kms = session.client("kms", region_name=region)
+            key_id = (action.get("evidence") or {}).get("key_id") or resource
+            if str(key_id).startswith("alias/"):
+                # resolve alias
+                key_id = resource
+            try:
+                snap["key_policy"] = kms.get_key_policy(
+                    KeyId=key_id, PolicyName="default"
+                ).get("Policy")
+                snap["key_id"] = key_id
+            except ClientError as e:
+                snap["key_policy_error"] = str(e)
+        elif rid == "SQS-PUBLIC-POLICY":
+            sqs = session.client("sqs", region_name=region)
+            qurl = (action.get("evidence") or {}).get("queue_url")
+            if not qurl:
+                # list and match by name
+                urls = sqs.list_queues().get("QueueUrls") or []
+                for u in urls:
+                    if u.rstrip("/").endswith("/" + resource) or resource in u:
+                        qurl = u
+                        break
+            snap["queue_url"] = qurl
+            if qurl:
+                attrs = sqs.get_queue_attributes(
+                    QueueUrl=qurl, AttributeNames=["Policy"]
+                ).get("Attributes", {})
+                snap["policy"] = attrs.get("Policy")
+        elif rid in ("SM-PUBLIC-POLICY", "SM-OVERBROAD-POLICY"):
+            sm = session.client("secretsmanager", region_name=region)
+            try:
+                rp = sm.get_resource_policy(SecretId=resource)
+                snap["resource_policy"] = rp.get("ResourcePolicy")
+                snap["secret_arn"] = rp.get("ARN") or resource
+            except ClientError as e:
+                snap["resource_policy_error"] = str(e)
         elif rid == "EC2-IMDSV1":
             ec2 = session.client("ec2", region_name=region)
             iid = str(resource).split("(")[0].strip()
@@ -659,6 +706,92 @@ def _strip_public_policy_doc(doc: dict[str, Any]) -> dict[str, Any] | None:
         if str(st.get("Effect", "Allow")).lower() == "allow" and _principal_is_public(
             st.get("Principal")
         ):
+            continue
+        kept.append(st)
+    if not kept:
+        return None
+    out = dict(doc)
+    out["Statement"] = kept
+    return out
+
+
+def _tighten_trust_policy(doc: dict[str, Any], *, account_id: str, role_name: str) -> dict[str, Any]:
+    """
+    Replace Principal * / AWS:* with a safe principal.
+    EC2-style roles → Service: ec2.amazonaws.com; else account root.
+    """
+    stmts = doc.get("Statement", [])
+    if isinstance(stmts, dict):
+        stmts = [stmts]
+    new_stmts = []
+    for st in stmts:
+        if not isinstance(st, dict):
+            continue
+        st = dict(st)
+        if str(st.get("Effect", "Allow")).lower() == "allow" and _principal_is_public(
+            st.get("Principal")
+        ):
+            if "ec2" in role_name.lower():
+                st["Principal"] = {"Service": "ec2.amazonaws.com"}
+            else:
+                st["Principal"] = {
+                    "AWS": f"arn:aws:iam::{account_id}:root"
+                }
+            # keep Action sts:AssumeRole
+            if not st.get("Action"):
+                st["Action"] = "sts:AssumeRole"
+        new_stmts.append(st)
+    if not new_stmts:
+        # minimal safe trust so the role is not left unusable
+        if "ec2" in role_name.lower():
+            principal: Any = {"Service": "ec2.amazonaws.com"}
+        else:
+            principal = {"AWS": f"arn:aws:iam::{account_id}:root"}
+        new_stmts = [
+            {
+                "Effect": "Allow",
+                "Principal": principal,
+                "Action": "sts:AssumeRole",
+            }
+        ]
+    return {"Version": doc.get("Version") or "2012-10-17", "Statement": new_stmts}
+
+
+def _strip_public_or_root_broad_secret_policy(
+    doc: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Remove Allow statements with Principal * or overly broad account-root wildcards."""
+    stmts = doc.get("Statement", [])
+    if isinstance(stmts, dict):
+        stmts = [stmts]
+    kept = []
+    for st in stmts:
+        if not isinstance(st, dict):
+            continue
+        if str(st.get("Effect", "Allow")).lower() != "allow":
+            kept.append(st)
+            continue
+        if _principal_is_public(st.get("Principal")):
+            continue
+        # drop root principal with many secretsmanager actions (lab overbroad)
+        principal = st.get("Principal") or {}
+        aws_p = principal.get("AWS") if isinstance(principal, dict) else None
+        is_root = False
+        for v in (aws_p if isinstance(aws_p, list) else [aws_p]):
+            if isinstance(v, str) and v.endswith(":root"):
+                is_root = True
+        actions = st.get("Action")
+        if isinstance(actions, str):
+            actions = [actions]
+        actions = [str(a).lower() for a in (actions or [])]
+        dangerous = {
+            "secretsmanager:getsecretvalue",
+            "secretsmanager:putsecretvalue",
+            "secretsmanager:deletesecret",
+            "secretsmanager:*",
+            "*",
+        }
+        if is_root and (set(actions) & dangerous or "*" in actions):
             continue
         kept.append(st)
     if not kept:
@@ -867,20 +1000,167 @@ def apply_one(
                 raise RuntimeError(
                     "Could not find/detach matching managed policy — apply manually"
                 )
-        elif rid in (
-            "IAM-TRUST-WILDCARD",
-            "KMS-PUBLIC-POLICY",
-            "SQS-PUBLIC-POLICY",
-            "SM-PUBLIC-POLICY",
-            "SM-OVERBROAD-POLICY",
-            "IAM-NO-MFA",
-        ):
-            # Live AWS: suppress on next scan only after successful demo path;
-            # for real accounts require manual for MFA/trust/KMS complexity —
-            # still mark applied only if simulate already handled above.
+        elif rid == "IAM-TRUST-WILDCARD":
+            iam = session.client("iam")
+            role_name = resource
+            role = iam.get_role(RoleName=role_name)["Role"]
+            doc = role.get("AssumeRolePolicyDocument") or {}
+            if isinstance(doc, str):
+                doc = json.loads(doc)
+            # ensure snapshot
+            if not a.get("snapshot") or not a["snapshot"].get("assume_role_policy"):
+                a["snapshot"] = a.get("snapshot") or {}
+                a["snapshot"]["assume_role_policy"] = doc
+            account_id = (
+                (a.get("snapshot") or {}).get("account_id")
+                or session.client("sts").get_caller_identity()["Account"]
+            )
+            tight = _tighten_trust_policy(
+                doc, account_id=str(account_id), role_name=role_name
+            )
+            iam.update_assume_role_policy(
+                RoleName=role_name,
+                PolicyDocument=json.dumps(tight),
+            )
+            a["preview"] = (
+                f"Updated trust policy on {role_name}: removed Principal * "
+                f"(now ec2.amazonaws.com or account root)"
+            )
+        elif rid == "KMS-PUBLIC-POLICY":
+            kms = session.client("kms", region_name=region)
+            key_id = (
+                (a.get("snapshot") or {}).get("key_id")
+                or (a.get("evidence") or {}).get("key_id")
+                or resource
+            )
+            # evidence may only be on original finding — try list aliases
+            if str(resource).startswith("alias/"):
+                key_id = resource
+            try:
+                raw = kms.get_key_policy(KeyId=key_id, PolicyName="default")["Policy"]
+            except ClientError:
+                # resolve alias → key id
+                aliases = kms.list_aliases().get("Aliases", [])
+                for al in aliases:
+                    if al.get("AliasName") == resource or al.get("AliasName") == f"alias/{resource}":
+                        key_id = al.get("TargetKeyId") or key_id
+                        break
+                raw = kms.get_key_policy(KeyId=key_id, PolicyName="default")["Policy"]
+            doc = json.loads(raw) if isinstance(raw, str) else raw
+            a.setdefault("snapshot", {})
+            a["snapshot"]["key_policy"] = raw if isinstance(raw, str) else json.dumps(doc)
+            a["snapshot"]["key_id"] = key_id
+            new_doc = _strip_public_policy_doc(doc)
+            if new_doc is None:
+                # keep account root kms:* so key is not locked out
+                account_id = session.client("sts").get_caller_identity()["Account"]
+                new_doc = {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Sid": "EnableRootPermissions",
+                            "Effect": "Allow",
+                            "Principal": {
+                                "AWS": f"arn:aws:iam::{account_id}:root"
+                            },
+                            "Action": "kms:*",
+                            "Resource": "*",
+                        }
+                    ],
+                }
+            kms.put_key_policy(
+                KeyId=key_id,
+                PolicyName="default",
+                Policy=json.dumps(new_doc),
+            )
+            a["preview"] = f"Removed public Principal * from KMS key policy ({key_id})"
+        elif rid == "SQS-PUBLIC-POLICY":
+            sqs = session.client("sqs", region_name=region)
+            qurl = (a.get("snapshot") or {}).get("queue_url")
+            if not qurl:
+                urls = sqs.list_queues().get("QueueUrls") or []
+                for u in urls:
+                    if resource in u or u.rstrip("/").endswith("/" + resource):
+                        qurl = u
+                        break
+            if not qurl:
+                raise RuntimeError(f"Could not resolve SQS queue URL for {resource}")
+            attrs = sqs.get_queue_attributes(
+                QueueUrl=qurl, AttributeNames=["Policy", "QueueArn"]
+            ).get("Attributes", {})
+            a.setdefault("snapshot", {})
+            a["snapshot"]["queue_url"] = qurl
+            a["snapshot"]["policy"] = attrs.get("Policy")
+            policy_raw = attrs.get("Policy")
+            if policy_raw:
+                doc = json.loads(policy_raw)
+                new_doc = _strip_public_policy_doc(doc)
+                if new_doc is None:
+                    sqs.set_queue_attributes(
+                        QueueUrl=qurl, Attributes={"Policy": ""}
+                    )
+                    # empty policy = delete
+                    try:
+                        # some regions need omit; use empty JSON account-only deny public
+                        account_id = session.client("sts").get_caller_identity()[
+                            "Account"
+                        ]
+                        qarn = attrs.get("QueueArn") or ""
+                        private = {
+                            "Version": "2012-10-17",
+                            "Statement": [
+                                {
+                                    "Effect": "Allow",
+                                    "Principal": {
+                                        "AWS": f"arn:aws:iam::{account_id}:root"
+                                    },
+                                    "Action": "sqs:*",
+                                    "Resource": qarn or "*",
+                                }
+                            ],
+                        }
+                        sqs.set_queue_attributes(
+                            QueueUrl=qurl,
+                            Attributes={"Policy": json.dumps(private)},
+                        )
+                    except ClientError:
+                        pass
+                else:
+                    sqs.set_queue_attributes(
+                        QueueUrl=qurl,
+                        Attributes={"Policy": json.dumps(new_doc)},
+                    )
+            a["preview"] = f"Removed public Principal * from SQS queue {resource}"
+        elif rid in ("SM-PUBLIC-POLICY", "SM-OVERBROAD-POLICY"):
+            sm = session.client("secretsmanager", region_name=region)
+            try:
+                rp = sm.get_resource_policy(SecretId=resource)
+            except ClientError as e:
+                raise RuntimeError(f"Secrets Manager get policy failed: {e}") from e
+            raw = rp.get("ResourcePolicy")
+            a.setdefault("snapshot", {})
+            a["snapshot"]["resource_policy"] = raw
+            a["snapshot"]["secret_arn"] = rp.get("ARN") or resource
+            if not raw:
+                a["preview"] = "No resource policy on secret — nothing to strip"
+            else:
+                doc = json.loads(raw) if isinstance(raw, str) else raw
+                new_doc = _strip_public_or_root_broad_secret_policy(doc)
+                if new_doc is None:
+                    sm.delete_resource_policy(SecretId=resource)
+                    a["preview"] = f"Deleted over-broad resource policy on {resource}"
+                else:
+                    sm.put_resource_policy(
+                        SecretId=resource,
+                        ResourcePolicy=json.dumps(new_doc),
+                    )
+                    a["preview"] = f"Tightened Secrets Manager policy on {resource}"
+        elif rid == "IAM-NO-MFA":
+            # Cannot programmatically enroll MFA for a human without device
             raise RuntimeError(
-                f"{rid} requires manual/console steps in live AWS "
-                f"(or use Demo mode for full auto demo). CLI: {a.get('cli_hint') or 'see finding'}"
+                f"IAM-NO-MFA cannot be fully automated: user '{resource}' must assign "
+                "an MFA device in IAM console (Users → Security credentials). "
+                "Other findings in this job can still be auto-fixed."
             )
         else:
             a["status"] = "skipped"
@@ -1018,6 +1298,45 @@ def rollback_one(
                         "InvalidPermission.Duplicate",
                     ):
                         raise
+        elif rid == "IAM-TRUST-WILDCARD":
+            prev = snap.get("assume_role_policy")
+            if prev:
+                if not isinstance(prev, str):
+                    prev = json.dumps(prev)
+                session.client("iam").update_assume_role_policy(
+                    RoleName=resource, PolicyDocument=prev
+                )
+        elif rid == "KMS-PUBLIC-POLICY":
+            prev = snap.get("key_policy")
+            key_id = snap.get("key_id") or resource
+            if prev:
+                session.client("kms", region_name=region).put_key_policy(
+                    KeyId=key_id,
+                    PolicyName="default",
+                    Policy=prev if isinstance(prev, str) else json.dumps(prev),
+                )
+        elif rid == "SQS-PUBLIC-POLICY":
+            qurl = snap.get("queue_url")
+            prev = snap.get("policy")
+            if qurl and prev is not None:
+                session.client("sqs", region_name=region).set_queue_attributes(
+                    QueueUrl=qurl,
+                    Attributes={"Policy": prev if isinstance(prev, str) else json.dumps(prev)},
+                )
+        elif rid in ("SM-PUBLIC-POLICY", "SM-OVERBROAD-POLICY"):
+            sm = session.client("secretsmanager", region_name=region)
+            prev = snap.get("resource_policy")
+            sid = snap.get("secret_arn") or resource
+            if prev:
+                sm.put_resource_policy(
+                    SecretId=sid,
+                    ResourcePolicy=prev if isinstance(prev, str) else json.dumps(prev),
+                )
+            else:
+                try:
+                    sm.delete_resource_policy(SecretId=sid)
+                except ClientError:
+                    pass
         elif rid == "EC2-IMDSV1":
             meta = snap.get("metadata_options") or {}
             tokens = meta.get("HttpTokens") or "optional"
