@@ -1063,18 +1063,24 @@ def apply_one(
                 (a.get("snapshot") or {}).get("role_name") or resource
             )
             try:
+                caller = session.client("sts").get_caller_identity()
+            except Exception:  # noqa: BLE001
+                caller = {}
+            try:
                 role = iam.get_role(RoleName=role_name)["Role"]
             except ClientError as e:
                 if _is_missing_entity(e):
-                    # Role gone → trust issue is already "fixed" (nothing to assume)
-                    a["preview"] = (
-                        f"Role '{role_name}' does not exist in this account "
-                        f"(caller account may differ from scan, or role was deleted). "
-                        f"Treated as resolved."
-                    )
-                    a["status"] = "applied"
-                    a["error"] = None
-                    return a
+                    # Wrong account vs deleted role — never mark applied for live AWS.
+                    # Scan found this role; if GetRole fails, Apply session is wrong.
+                    raise RuntimeError(
+                        f"IAM GetRole NoSuchEntity for '{role_name}' under caller "
+                        f"account={caller.get('Account')} arn={caller.get('Arn')}. "
+                        "Apply must use the same AssumeRole session as the scan "
+                        "(Settings: Access Key + Secret + Role ARN). "
+                        "Re-save Settings on Vercel (storage is ephemeral), then "
+                        "PLAN ALL → APPLY FIXES again. Detail: "
+                        f"{e.response.get('Error', {}).get('Message', e)}"
+                    ) from e
                 raise
             doc = role.get("AssumeRolePolicyDocument") or {}
             if isinstance(doc, str):
@@ -1085,6 +1091,7 @@ def apply_one(
                 a["snapshot"]["role_name"] = role_name
             account_id = (
                 (a.get("snapshot") or {}).get("account_id")
+                or caller.get("Account")
                 or session.client("sts").get_caller_identity()["Account"]
             )
             tight = _tighten_trust_policy(
@@ -1096,7 +1103,8 @@ def apply_one(
             )
             a["preview"] = (
                 f"Updated trust policy on {role_name}: removed Principal * "
-                f"(now ec2.amazonaws.com or account root)"
+                f"(now ec2.amazonaws.com or account root) "
+                f"[account={account_id}]"
             )
         elif rid == "KMS-PUBLIC-POLICY":
             kms = session.client("kms", region_name=region)
@@ -1246,22 +1254,37 @@ def apply_one(
                 a["preview"] = f"Applied {rid} on {resource} in AWS"
         # Do NOT mark_fixed for live AWS — next scan must reflect real account state.
     except (ClientError, BotoCoreError, RuntimeError) as exc:
-        if _is_missing_entity(exc):
-            # Resource already gone → treat as fixed so re-scan is clean
+        err = str(exc)
+        # NoSuchEntity on IAM roles/users often means wrong account (base keys without
+        # AssumeRole), not a successful fix. Only treat as applied for disposable
+        # resources (SG/S3/queue) that may already be gone after a prior fix.
+        if _is_missing_entity(exc) and rid not in (
+            "IAM-TRUST-WILDCARD",
+            "IAM-ROLE-ADMIN",
+            "IAM-ADMIN-POLICY",
+            "IAM-USER-ADMIN",
+            "IAM-STAR-ACTIONS",
+            "IAM-NO-MFA",
+        ):
             a["status"] = "applied"
             a["error"] = None
             a["preview"] = (
-                f"Resource not found for {rid} ({resource}) — treated as already fixed. "
-                f"If this keeps appearing, re-scan with credentials in the correct account."
+                f"Resource not found for {rid} ({resource}) — already gone in this account."
             )
             return a
         a["status"] = "failed"
-        err = str(exc)
-        if "AccessDenied" in err or "UnauthorizedOperation" in err or "not authorized" in err.lower():
+        if "NoSuchEntity" in err or "does not exist" in err.lower():
+            a["error"] = (
+                f"AWS could not find resource for {rid} on {resource}. "
+                "For IAM roles this almost always means Apply used the wrong account "
+                "(base Access Keys without AssumeRole into your Settings Role ARN). "
+                f"Detail: {err}"
+            )
+        elif "AccessDenied" in err or "UnauthorizedOperation" in err or "not authorized" in err.lower():
             a["error"] = (
                 f"AWS denied this write ({rid} on {resource}). "
-                "Apply uses the scan AssumeRole when possible, else your Access Keys. "
-                "Both need permission in the **same account** as the finding. "
+                "Apply uses AssumeRole into your Settings Role ARN (same as scan). "
+                "That role (or your keys) need iam/s3/ec2 write on the lab resources. "
                 f"Detail: {err}"
             )
         else:

@@ -841,8 +841,9 @@ def remediate_apply(body: RemediateJobRequest):
     """
     Apply planned fixes against real AWS.
 
-    Uses base Access Keys from Settings (or remediator role) — NOT the
-    read-only scan AssumeRole, which cannot write.
+    With Access Key + Secret + Role ARN (normal lab): AssumeRole into that Role ARN
+    first (same account as scan findings), then write. Base keys alone are only used
+    when auth_mode=direct.
     """
     if not body.confirm:
         raise HTTPException(
@@ -864,9 +865,10 @@ def remediate_apply(body: RemediateJobRequest):
             detail={
                 "error": err,
                 "hint": (
-                    "In Settings, save Access Key + Secret for an IAM user that can "
-                    "MODIFY the target resources. Scanning often uses a read-only role; "
-                    "Fixing Options uses your base keys for writes."
+                    "REAL AWS only: Settings → Access Key ID + Secret Access Key + Role ARN "
+                    "(auth mode Assume Role). Save, Test Connection, then re-scan. "
+                    "On Vercel, re-save after idle (server /tmp storage is ephemeral). "
+                    "Apply AssumeRoles into that Role ARN so GetRole/fixes hit the lab account."
                 ),
             },
         )
