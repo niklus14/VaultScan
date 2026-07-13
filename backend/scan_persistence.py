@@ -13,7 +13,13 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-_DATA_DIR = Path(__file__).resolve().parent / "data"
+def _resolve_data_dir() -> Path:
+    if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
+        return Path(os.environ.get("VAULTSCAN_DATA_DIR", "/tmp/vaultscan-data"))
+    return Path(os.environ.get("VAULTSCAN_DATA_DIR", Path(__file__).resolve().parent / "data"))
+
+
+_DATA_DIR = _resolve_data_dir()
 _SCANS_PATH = _DATA_DIR / "scans.json"
 _REPORTS_PATH = _DATA_DIR / "reports.json"
 _LOCK = threading.Lock()

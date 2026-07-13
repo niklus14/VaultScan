@@ -204,6 +204,105 @@ def build_attack_paths(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
             }
         )
 
+    # Path 6: Wildcard role trust + admin → internet assume-role takeover
+    trust_star = any_rules("IAM-TRUST-WILDCARD")
+    role_admin = any_rules("IAM-ROLE-ADMIN")
+    if trust_star:
+        steps = [_node(trust_star[0], "entry")]
+        if role_admin:
+            steps.append(_node(role_admin[0], "impact"))
+        paths.append(
+            {
+                "id": "path-trust-wildcard-takeover",
+                "name": "Public role trust → account takeover",
+                "outcome": "Anyone who knows the role ARN can assume it and inherit privileges",
+                "severity": "CRITICAL",
+                "likelihood": "High when trust Principal is * and role is powerful",
+                "impact": "Full account control if role has admin rights",
+                "steps": steps,
+                "break_chain": [
+                    "Replace trust Principal * with specific account/user ARNs",
+                    "Detach AdministratorAccess; use least-privilege policies",
+                ],
+            }
+        )
+
+    # Path 7: KMS public key policy → crypto abuse / data decrypt
+    kms_pub = any_rules("KMS-PUBLIC-POLICY")
+    if kms_pub:
+        paths.append(
+            {
+                "id": "path-kms-exposure",
+                "name": "Exposed KMS key → data decryption",
+                "outcome": "Attackers use your CMK to decrypt intercepted ciphertext",
+                "severity": "CRITICAL",
+                "likelihood": "Medium–High when key policy Principal is *",
+                "impact": "Confidential data disclosure across S3/EBS/RDS/Secrets",
+                "steps": [_node(kms_pub[0], "entry")],
+                "break_chain": [
+                    "Remove Principal * from the key policy",
+                    "Grant kms:Decrypt only to specific application roles",
+                ],
+            }
+        )
+
+    # Path 8: Public SQS → message inject / steal
+    sqs_pub = any_rules("SQS-PUBLIC-POLICY")
+    if sqs_pub:
+        paths.append(
+            {
+                "id": "path-sqs-public",
+                "name": "Public SQS → pipeline poison / data theft",
+                "outcome": "Unauthenticated send/receive on messaging backbone",
+                "severity": "CRITICAL",
+                "likelihood": "High once queue URL/ARN is discovered",
+                "impact": "Business logic abuse, credential/message exfil",
+                "steps": [_node(sqs_pub[0], "entry")],
+                "break_chain": [
+                    "Remove Principal * from the queue policy",
+                    "Allow only producer/consumer role ARNs",
+                ],
+            }
+        )
+
+    # Path 9: Priv-esc without boundary
+    privesc = any_rules("IAM-PRIVESC-NO-BOUNDARY")
+    if privesc:
+        paths.append(
+            {
+                "id": "path-iam-privesc",
+                "name": "IAM create/attach without boundary → self-admin",
+                "outcome": "Restricted identity elevates to AdministratorAccess",
+                "severity": "CRITICAL",
+                "likelihood": "High if the identity is compromised or overly trusted",
+                "impact": "Total account takeover via policy attachment",
+                "steps": [_node(privesc[0], "escalate")],
+                "break_chain": [
+                    "Require iam:PermissionsBoundary on CreateUser/AttachUserPolicy",
+                    "Remove iam:AttachUserPolicy from non-break-glass roles",
+                ],
+            }
+        )
+
+    # Path 10: Broad secrets policy
+    sm = any_rules("SM-PUBLIC-POLICY", "SM-OVERBROAD-POLICY")
+    if sm:
+        paths.append(
+            {
+                "id": "path-secrets-exposure",
+                "name": "Weak Secrets Manager policy → credential theft",
+                "outcome": "Secrets readable or mutable by overly broad principals",
+                "severity": "HIGH",
+                "likelihood": "Medium when resource policies are root-wide or public",
+                "impact": "API keys, DB passwords, and tokens stolen",
+                "steps": [_node(sm[0], "entry")],
+                "break_chain": [
+                    "Scope secret policy to a single application role",
+                    "Remove PutSecretValue/DeleteSecret from broad grants",
+                ],
+            }
+        )
+
     # Sort critical first
     order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
     paths.sort(key=lambda p: order.get(p.get("severity", "LOW"), 9))

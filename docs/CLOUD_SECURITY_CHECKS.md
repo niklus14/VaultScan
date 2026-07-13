@@ -95,7 +95,23 @@ Over-privileged identities are the easiest path to full account takeover.
 
 ---
 
-## 5. Other High-Value Services
+## 5. Validation-lab services (Steps 4–10)
+
+| Check | Rule ID | Severity | Description |
+|-------|---------|----------|-------------|
+| KMS key policy Principal `*` | `KMS-PUBLIC-POLICY` | **CRITICAL** | CMK usable by anonymous/external principals |
+| IAM allows CloudTrail stop/delete/update | `IAM-CLOUDTRAIL-DESTROY` | **HIGH** | Audit trail can be blinded |
+| Role trust Principal `*` / AWS `*` | `IAM-TRUST-WILDCARD` | **CRITICAL** | Anyone may AssumeRole if they know the ARN |
+| SQS queue policy Principal `*` | `SQS-PUBLIC-POLICY` | **CRITICAL** | Public send/receive on messaging |
+| IAM allows ModifyImage/SnapshotAttribute | `IAM-IMAGE-LEAK` | **HIGH** | AMIs/snapshots can be made public |
+| CreateUser/AttachUserPolicy without Permissions Boundary | `IAM-PRIVESC-NO-BOUNDARY` | **CRITICAL** | Self-admin privilege escalation |
+| Secrets Manager public or root-broad policy | `SM-PUBLIC-POLICY` / `SM-OVERBROAD-POLICY` | **CRITICAL** / **HIGH** | Secrets readable or fully controlled too widely |
+
+**Key calls**: `kms:ListKeys` / `GetKeyPolicy`, `sqs:ListQueues` / `GetQueueAttributes`, `secretsmanager:ListSecrets` / `GetResourcePolicy`, `iam:GetRole` (trust), `GetPolicyVersion`.
+
+---
+
+## 6. Other High-Value Services
 
 - **Lambda**: 
   - Function URL or API Gateway public without auth

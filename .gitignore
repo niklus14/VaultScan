@@ -41,11 +41,12 @@ Thumbs.db
 *.swp
 *.swo
 
-# Local reports / demo output
+# Local reports
 vaultscan_report.json
 *.log
+.vercel
 
-# Archives & large binaries (keep methodology PDF)
+# Archives
 *.zip
 *.pptx
 *.pdf

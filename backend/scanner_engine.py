@@ -1,15 +1,22 @@
 """
 VaultScan real-AWS misconfiguration engine.
 
-Runs S3 / IAM / EC2 Security Group / RDS checks using a boto3 session
-(typically from STS AssumeRole). Gracefully skips services the role cannot access.
+Runs S3 / IAM / EC2 / RDS / KMS / SQS / Secrets Manager checks using a boto3
+session (typically from STS AssumeRole). Gracefully skips services the role
+cannot access.
+
+Covers intentional validation-lab steps:
+  1 S3 public · 2 Admin roles · 3 Open SG / IMDSv1
+  4 KMS wildcard key policy · 5 CloudTrail destroy IAM
+  6 Role trust Principal * · 7 Public SQS · 8 AMI/snapshot share perms
+  9 IAM priv-esc without boundary · 10 Broad Secrets Manager policy
 """
 from __future__ import annotations
 
 import json
 import uuid
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Iterable
 
 import boto3
 from botocore.exceptions import ClientError
@@ -19,6 +26,22 @@ from aws_client import AwsConnectionInfo, get_scan_session
 
 
 SEVERITY_WEIGHT = {"CRITICAL": 25, "HIGH": 12, "MEDIUM": 5, "LOW": 2}
+
+# Lab / high-risk IAM action sets (matched case-insensitively)
+_CLOUDTRAIL_DESTROY = {
+    "cloudtrail:stoplogging",
+    "cloudtrail:deletetrail",
+    "cloudtrail:updatetrail",
+}
+_IMAGE_LEAK = {
+    "ec2:modifyimageattribute",
+    "ec2:modifysnapshotattribute",
+}
+_PRIV_ESC = {
+    "iam:createuser",
+    "iam:attachuserpolicy",
+    "iam:putuserpolicy",
+}
 
 
 def utcnow() -> str:
@@ -52,6 +75,218 @@ def _finding(
         "evidence": evidence or {},
         "timestamp": utcnow(),
     }
+
+
+# ─── Policy helpers (resource + identity policies) ────────────────────────────
+
+def _as_list(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def _normalize_statements(doc: Any) -> list[dict[str, Any]]:
+    if not doc:
+        return []
+    if isinstance(doc, str):
+        try:
+            doc = json.loads(doc)
+        except json.JSONDecodeError:
+            return []
+    if not isinstance(doc, dict):
+        return []
+    stmts = doc.get("Statement", [])
+    if isinstance(stmts, dict):
+        return [stmts]
+    if isinstance(stmts, list):
+        return [s for s in stmts if isinstance(s, dict)]
+    return []
+
+
+def _principal_is_wildcard(principal: Any) -> bool:
+    """True when Principal is * or AWS:* (anonymous / any AWS principal)."""
+    if principal is None:
+        return False
+    if principal == "*":
+        return True
+    if isinstance(principal, str):
+        return principal.strip() == "*"
+    if isinstance(principal, dict):
+        for key in ("AWS", "CanonicalUser", "Federated", "Service"):
+            if key not in principal:
+                continue
+            for val in _as_list(principal.get(key)):
+                if val == "*" or val == ["*"]:
+                    return True
+                if isinstance(val, str) and val.strip() == "*":
+                    return True
+    return False
+
+
+def _statement_actions(stmt: dict[str, Any]) -> list[str]:
+    return [str(a).lower() for a in _as_list(stmt.get("Action"))]
+
+
+def _actions_match(actions: Iterable[str], needles: set[str]) -> list[str]:
+    """Return which needles are covered by actions (including service:* and *)."""
+    acts = {a.lower() for a in actions}
+    if "*" in acts:
+        return sorted(needles)
+    hit: list[str] = []
+    for n in needles:
+        n = n.lower()
+        if n in acts:
+            hit.append(n)
+            continue
+        svc = n.split(":", 1)[0]
+        if f"{svc}:*" in acts:
+            hit.append(n)
+    return hit
+
+
+def _has_permissions_boundary_condition(stmt: dict[str, Any]) -> bool:
+    cond = stmt.get("Condition") or {}
+    blob = json.dumps(cond).lower()
+    return "permissionsboundary" in blob
+
+
+def _is_account_root_principal(principal: Any, account_id: str | None) -> bool:
+    """Principal is account root (arn:aws:iam::ACCOUNT:root) — broad internal access."""
+    if not isinstance(principal, dict):
+        return False
+    roots = []
+    for val in _as_list(principal.get("AWS")):
+        if isinstance(val, str) and val.endswith(":root"):
+            roots.append(val)
+    if not roots:
+        return False
+    if account_id and any(f":{account_id}:root" in r for r in roots):
+        return True
+    # Any account root principal is still weaker than least-privilege app roles
+    return True
+
+
+def analyze_identity_policy(
+    *,
+    doc: Any,
+    subject: str,
+    policy_name: str,
+    attachment: str,
+) -> list[dict[str, Any]]:
+    """
+    Inspect an IAM identity policy document for lab Steps 5, 8, 9
+    (CloudTrail destroy, image/snapshot leakage, priv-esc without boundary).
+
+    Full Action:* admin policies are already covered by IAM-ROLE-ADMIN /
+    IAM-INLINE-STAR / AdministratorAccess name checks — skip specialized
+    lab rules when the statement is unrestricted Action:* to avoid noise.
+    """
+    out: list[dict[str, Any]] = []
+    for stmt in _normalize_statements(doc):
+        if str(stmt.get("Effect", "Allow")).lower() != "allow":
+            continue
+        actions = _statement_actions(stmt)
+        # Unrestricted admin already reported elsewhere
+        if "*" in actions:
+            continue
+
+        ct = _actions_match(actions, _CLOUDTRAIL_DESTROY)
+        if ct:
+            out.append(
+                _finding(
+                    severity="HIGH",
+                    service="IAM",
+                    resource=subject,
+                    title="IAM Policy Allows CloudTrail Destruction",
+                    description=(
+                        f"{attachment} '{policy_name}' on '{subject}' allows "
+                        f"{', '.join(ct)}. A compromised identity can stop or delete "
+                        "audit trails and blind the SOC (validation lab Step 5)."
+                    ),
+                    remediation=(
+                        f"Remove cloudtrail:StopLogging/DeleteTrail/UpdateTrail from "
+                        f"'{policy_name}' on {subject}; restrict to break-glass roles only."
+                    ),
+                    compliance=["CIS AWS 3.1", "NIST 800-53 AU-9"],
+                    rule_id="IAM-CLOUDTRAIL-DESTROY",
+                    evidence={
+                        "policy_name": policy_name,
+                        "attachment": attachment,
+                        "actions": ct,
+                    },
+                )
+            )
+
+        img = _actions_match(actions, _IMAGE_LEAK)
+        if img:
+            out.append(
+                _finding(
+                    severity="HIGH",
+                    service="IAM",
+                    resource=subject,
+                    title="IAM Policy Allows Exposing AMIs/Snapshots",
+                    description=(
+                        f"{attachment} '{policy_name}' on '{subject}' allows "
+                        f"{', '.join(img)}. Attackers can mark private images/snapshots "
+                        "public and clone corporate servers (validation lab Step 8)."
+                    ),
+                    remediation=(
+                        f"Remove ec2:ModifyImageAttribute / ModifySnapshotAttribute from "
+                        f"'{policy_name}', or scope Resource ARNs tightly."
+                    ),
+                    compliance=["CIS AWS 1.16", "NIST 800-53 AC-6"],
+                    rule_id="IAM-IMAGE-LEAK",
+                    evidence={
+                        "policy_name": policy_name,
+                        "attachment": attachment,
+                        "actions": img,
+                    },
+                )
+            )
+
+        pe = _actions_match(actions, _PRIV_ESC)
+        if pe and not _has_permissions_boundary_condition(stmt):
+            out.append(
+                _finding(
+                    severity="CRITICAL",
+                    service="IAM",
+                    resource=subject,
+                    title="IAM Privilege Escalation Without Permissions Boundary",
+                    description=(
+                        f"{attachment} '{policy_name}' on '{subject}' allows "
+                        f"{', '.join(pe)} without a Permissions Boundary condition. "
+                        "The identity can attach AdministratorAccess to a new user "
+                        "(validation lab Step 9)."
+                    ),
+                    remediation=(
+                        "Require iam:PermissionsBoundary on CreateUser/AttachUserPolicy, "
+                        "or remove these actions from non-admin roles."
+                    ),
+                    compliance=["CIS AWS 1.16", "NIST 800-53 AC-6"],
+                    rule_id="IAM-PRIVESC-NO-BOUNDARY",
+                    evidence={
+                        "policy_name": policy_name,
+                        "attachment": attachment,
+                        "actions": pe,
+                    },
+                )
+            )
+    return out
+
+
+def _get_managed_policy_doc(iam, policy_arn: str) -> Any | None:
+    try:
+        meta = iam.get_policy(PolicyArn=policy_arn)["Policy"]
+        ver = meta.get("DefaultVersionId")
+        if not ver:
+            return None
+        return iam.get_policy_version(PolicyArn=policy_arn, VersionId=ver)[
+            "PolicyVersion"
+        ]["Document"]
+    except ClientError:
+        return None
 
 
 # ─── S3 ───────────────────────────────────────────────────────────────────────
@@ -381,12 +616,103 @@ def check_iam(session: boto3.Session) -> list[dict]:
         except ClientError:
             pass
 
-    # Roles with AdministratorAccess (common demo misconfig)
+    # Users: customer-managed attachments (CloudTrail destroy / image leak / priv-esc)
+    for user in users:
+        uname = user["UserName"]
+        try:
+            for pol in iam.list_attached_user_policies(UserName=uname).get(
+                "AttachedPolicies", []
+            ):
+                arn = pol.get("PolicyArn") or ""
+                pname = pol.get("PolicyName") or arn
+                # Skip AWS managed except we still want custom lab managed policies
+                if ":aws:policy/" in arn and "AdministratorAccess" not in pname:
+                    # Still analyze AWS managed only if name matches lab patterns
+                    if not any(
+                        x in pname.lower()
+                        for x in (
+                            "trail",
+                            "leakage",
+                            "privesc",
+                            "scanner",
+                            "permissive",
+                        )
+                    ):
+                        continue
+                doc = _get_managed_policy_doc(iam, arn) if arn else None
+                if doc:
+                    findings.extend(
+                        analyze_identity_policy(
+                            doc=doc,
+                            subject=uname,
+                            policy_name=pname,
+                            attachment="managed policy",
+                        )
+                    )
+        except ClientError:
+            pass
+        try:
+            for pname in iam.list_user_policies(UserName=uname).get("PolicyNames", []):
+                pol = iam.get_user_policy(UserName=uname, PolicyName=pname)
+                findings.extend(
+                    analyze_identity_policy(
+                        doc=pol.get("PolicyDocument"),
+                        subject=uname,
+                        policy_name=pname,
+                        attachment="inline policy",
+                    )
+                )
+        except ClientError:
+            pass
+
+    # Roles: AdministratorAccess, wildcard trust (Step 6), dangerous policies
     try:
         paginator = iam.get_paginator("list_roles")
         for page in paginator.paginate():
             for role in page.get("Roles", []):
                 rname = role["RoleName"]
+                # Skip service-linked noise somewhat
+                path = role.get("Path") or "/"
+                if path.startswith("/aws-service-role/"):
+                    continue
+
+                # Step 6 — trust policy Principal AWS *
+                trust = role.get("AssumeRolePolicyDocument")
+                if not trust:
+                    try:
+                        trust = iam.get_role(RoleName=rname)["Role"].get(
+                            "AssumeRolePolicyDocument"
+                        )
+                    except ClientError:
+                        trust = None
+                for stmt in _normalize_statements(trust):
+                    if str(stmt.get("Effect", "Allow")).lower() != "allow":
+                        continue
+                    principal = stmt.get("Principal")
+                    if _principal_is_wildcard(principal):
+                        findings.append(
+                            _finding(
+                                severity="CRITICAL",
+                                service="IAM",
+                                resource=rname,
+                                title="IAM Role Trust Policy Allows Any Principal",
+                                description=(
+                                    f"Role '{rname}' trust policy allows Principal '*' "
+                                    "(or AWS:*). Anyone who knows the role ARN may call "
+                                    "sts:AssumeRole and inherit its privileges "
+                                    "(validation lab Step 6)."
+                                ),
+                                remediation=(
+                                    f"aws iam update-assume-role-policy --role-name {rname} "
+                                    "--policy-document file://tight-trust.json  "
+                                    "# Principal must be specific account/user ARNs, not *"
+                                ),
+                                compliance=["CIS AWS 1.16", "NIST 800-53 AC-3"],
+                                rule_id="IAM-TRUST-WILDCARD",
+                                evidence={"principal": principal},
+                            )
+                        )
+
                 try:
                     for pol in iam.list_attached_role_policies(RoleName=rname).get(
                         "AttachedPolicies", []
@@ -400,7 +726,8 @@ def check_iam(session: boto3.Session) -> list[dict]:
                                     title="IAM Role Has AdministratorAccess",
                                     description=(
                                         f"Role '{rname}' has AdministratorAccess attached. "
-                                        "Any principal that can assume it gains full account control."
+                                        "Any principal that can assume it gains full account control "
+                                        "(validation lab Step 2)."
                                     ),
                                     remediation=(
                                         f"aws iam detach-role-policy --role-name {rname} "
@@ -410,12 +737,61 @@ def check_iam(session: boto3.Session) -> list[dict]:
                                     rule_id="IAM-ROLE-ADMIN",
                                 )
                             )
+                        arn = pol.get("PolicyArn") or ""
+                        pname = pol.get("PolicyName") or arn
+                        if ":aws:policy/" in arn and "AdministratorAccess" not in pname:
+                            if not any(
+                                x in pname.lower()
+                                for x in (
+                                    "trail",
+                                    "leakage",
+                                    "privesc",
+                                    "scanner",
+                                    "permissive",
+                                )
+                            ):
+                                continue
+                        doc = _get_managed_policy_doc(iam, arn) if arn else None
+                        if doc:
+                            findings.extend(
+                                analyze_identity_policy(
+                                    doc=doc,
+                                    subject=rname,
+                                    policy_name=pname,
+                                    attachment="role managed policy",
+                                )
+                            )
+                except ClientError:
+                    pass
+
+                try:
+                    for pname in iam.list_role_policies(RoleName=rname).get(
+                        "PolicyNames", []
+                    ):
+                        pol = iam.get_role_policy(RoleName=rname, PolicyName=pname)
+                        findings.extend(
+                            analyze_identity_policy(
+                                doc=pol.get("PolicyDocument"),
+                                subject=rname,
+                                policy_name=pname,
+                                attachment="role inline policy",
+                            )
+                        )
                 except ClientError:
                     pass
     except ClientError:
         pass
 
-    return findings
+    # De-duplicate findings by id
+    seen: set[str] = set()
+    unique: list[dict] = []
+    for f in findings:
+        fid = f.get("id") or f"{f.get('rule_id')}:{f.get('resource')}"
+        if fid in seen:
+            continue
+        seen.add(fid)
+        unique.append(f)
+    return unique
 
 
 # ─── EC2 Security Groups ──────────────────────────────────────────────────────
@@ -661,6 +1037,371 @@ def check_rds(session: boto3.Session, region: str) -> list[dict]:
     return findings
 
 
+# ─── KMS (lab Step 4) ─────────────────────────────────────────────────────────
+
+def check_kms(session: boto3.Session, region: str) -> list[dict]:
+    findings: list[dict] = []
+    kms = session.client("kms", region_name=region)
+
+    try:
+        paginator = kms.get_paginator("list_keys")
+        key_ids: list[str] = []
+        for page in paginator.paginate():
+            for k in page.get("Keys", []):
+                if k.get("KeyId"):
+                    key_ids.append(k["KeyId"])
+    except ClientError as e:
+        code = e.response["Error"].get("Code", "")
+        if code not in (
+            "AccessDenied",
+            "AccessDeniedException",
+            "UnauthorizedOperation",
+        ):
+            findings.append(
+                _finding(
+                    severity="LOW",
+                    service="KMS",
+                    resource="*",
+                    title="KMS scan skipped",
+                    description=str(e),
+                    remediation="Grant kms:ListKeys, kms:DescribeKey, kms:GetKeyPolicy.",
+                    compliance=[],
+                    rule_id="KMS-SKIP",
+                    region=region,
+                )
+            )
+        return findings
+
+    for key_id in key_ids:
+        # Skip AWS-managed keys where policy is fixed / not readable
+        try:
+            meta = kms.describe_key(KeyId=key_id)["KeyMetadata"]
+        except ClientError:
+            continue
+        if meta.get("KeyManager") == "AWS":
+            continue
+        if meta.get("KeyState") not in (None, "Enabled", "Disabled"):
+            # Still check Enabled keys primarily
+            if meta.get("KeyState") not in ("Enabled", "Disabled", "PendingImport"):
+                continue
+
+        alias = key_id
+        try:
+            aliases = kms.list_aliases(KeyId=key_id).get("Aliases", [])
+            if aliases:
+                alias = aliases[0].get("AliasName") or key_id
+        except ClientError:
+            pass
+
+        try:
+            policy_raw = kms.get_key_policy(KeyId=key_id, PolicyName="default")[
+                "Policy"
+            ]
+            doc = json.loads(policy_raw) if isinstance(policy_raw, str) else policy_raw
+        except ClientError:
+            continue
+
+        for stmt in _normalize_statements(doc):
+            if str(stmt.get("Effect", "Allow")).lower() != "allow":
+                continue
+            if not _principal_is_wildcard(stmt.get("Principal")):
+                continue
+            acts = _statement_actions(stmt)
+            crypto = _actions_match(
+                acts,
+                {
+                    "kms:encrypt",
+                    "kms:decrypt",
+                    "kms:reencrypt*",
+                    "kms:reencryptfrom",
+                    "kms:reencryptto",
+                    "kms:generatedatakey",
+                    "kms:generatedatakeywithoutplaintext",
+                    "kms:*",
+                },
+            )
+            # Also flag any wildcard principal allow on CMK
+            if not crypto and "*" not in acts and not any(
+                a.startswith("kms:") for a in acts
+            ):
+                # still dangerous if Action is broad
+                if acts:
+                    crypto = acts
+            findings.append(
+                _finding(
+                    severity="CRITICAL",
+                    service="KMS",
+                    resource=str(alias),
+                    title="KMS Key Policy Allows Public Principal",
+                    description=(
+                        f"Customer managed key '{alias}' ({key_id}) has a key policy "
+                        f"allowing Principal '*' for {', '.join(crypto) or 'KMS actions'}. "
+                        "Anonymous or external principals may use your key to encrypt/decrypt "
+                        "(validation lab Step 4)."
+                    ),
+                    remediation=(
+                        f"aws kms put-key-policy --key-id {key_id} --policy-name default "
+                        "--policy file://restricted-key-policy.json  "
+                        "# Remove Principal * ; grant only specific role ARNs"
+                    ),
+                    compliance=["CIS AWS 3.x", "NIST 800-53 SC-12", "GDPR Art.32"],
+                    rule_id="KMS-PUBLIC-POLICY",
+                    region=region,
+                    evidence={"key_id": key_id, "alias": alias, "actions": crypto},
+                )
+            )
+            break  # one finding per key is enough
+
+    return findings
+
+
+# ─── SQS (lab Step 7) ─────────────────────────────────────────────────────────
+
+def check_sqs(session: boto3.Session, region: str) -> list[dict]:
+    findings: list[dict] = []
+    sqs = session.client("sqs", region_name=region)
+
+    try:
+        urls = sqs.list_queues().get("QueueUrls") or []
+    except ClientError as e:
+        code = e.response["Error"].get("Code", "")
+        if code not in (
+            "AccessDenied",
+            "AccessDeniedException",
+            "UnauthorizedOperation",
+        ):
+            findings.append(
+                _finding(
+                    severity="LOW",
+                    service="SQS",
+                    resource="*",
+                    title="SQS scan skipped",
+                    description=str(e),
+                    remediation="Grant sqs:ListQueues, sqs:GetQueueAttributes.",
+                    compliance=[],
+                    rule_id="SQS-SKIP",
+                    region=region,
+                )
+            )
+        return findings
+
+    for url in urls:
+        qname = url.rstrip("/").split("/")[-1]
+        try:
+            attrs = sqs.get_queue_attributes(
+                QueueUrl=url, AttributeNames=["Policy", "QueueArn"]
+            ).get("Attributes", {})
+        except ClientError:
+            continue
+        policy_raw = attrs.get("Policy")
+        if not policy_raw:
+            continue
+        try:
+            doc = json.loads(policy_raw)
+        except json.JSONDecodeError:
+            continue
+
+        for stmt in _normalize_statements(doc):
+            if str(stmt.get("Effect", "Allow")).lower() != "allow":
+                continue
+            if not _principal_is_wildcard(stmt.get("Principal")):
+                continue
+            acts = _statement_actions(stmt)
+            risky = _actions_match(
+                acts,
+                {
+                    "sqs:sendmessage",
+                    "sqs:receivemessage",
+                    "sqs:deletemessage",
+                    "sqs:purgqueue",
+                    "sqs:purgequeue",
+                    "sqs:*",
+                },
+            )
+            findings.append(
+                _finding(
+                    severity="CRITICAL",
+                    service="SQS",
+                    resource=qname,
+                    title="SQS Queue Policy Allows Public Principal",
+                    description=(
+                        f"Queue '{qname}' resource policy allows Principal '*' for "
+                        f"{', '.join(risky) or 'SQS actions'}. Unauthenticated callers "
+                        "can inject or read messages (validation lab Step 7)."
+                    ),
+                    remediation=(
+                        f"aws sqs set-queue-attributes --queue-url {url} "
+                        "--attributes file://private-queue-policy.json  "
+                        "# Remove Principal * ; allow only application roles"
+                    ),
+                    compliance=["CIS AWS 4.x", "NIST 800-53 AC-3"],
+                    rule_id="SQS-PUBLIC-POLICY",
+                    region=region,
+                    evidence={
+                        "queue_url": url,
+                        "queue_arn": attrs.get("QueueArn"),
+                        "actions": risky or acts,
+                    },
+                )
+            )
+            break
+
+    return findings
+
+
+# ─── Secrets Manager (lab Step 10) ────────────────────────────────────────────
+
+def check_secrets_manager(session: boto3.Session, region: str) -> list[dict]:
+    findings: list[dict] = []
+    sm = session.client("secretsmanager", region_name=region)
+
+    try:
+        paginator = sm.get_paginator("list_secrets")
+        secrets: list[dict] = []
+        for page in paginator.paginate():
+            secrets.extend(page.get("SecretList") or [])
+    except ClientError as e:
+        code = e.response["Error"].get("Code", "")
+        if code not in (
+            "AccessDenied",
+            "AccessDeniedException",
+            "UnauthorizedOperation",
+        ):
+            findings.append(
+                _finding(
+                    severity="LOW",
+                    service="SecretsManager",
+                    resource="*",
+                    title="Secrets Manager scan skipped",
+                    description=str(e),
+                    remediation="Grant secretsmanager:ListSecrets, GetResourcePolicy.",
+                    compliance=[],
+                    rule_id="SM-SKIP",
+                    region=region,
+                )
+            )
+        return findings
+
+    account_id = None
+    try:
+        account_id = session.client("sts").get_caller_identity().get("Account")
+    except ClientError:
+        pass
+
+    for sec in secrets:
+        name = sec.get("Name") or sec.get("ARN") or "secret"
+        arn = sec.get("ARN") or name
+        try:
+            rp = sm.get_resource_policy(SecretId=arn)
+        except ClientError:
+            continue
+        policy_raw = rp.get("ResourcePolicy")
+        if not policy_raw:
+            continue
+        try:
+            doc = json.loads(policy_raw) if isinstance(policy_raw, str) else policy_raw
+        except json.JSONDecodeError:
+            continue
+
+        for stmt in _normalize_statements(doc):
+            if str(stmt.get("Effect", "Allow")).lower() != "allow":
+                continue
+            principal = stmt.get("Principal")
+            acts = _statement_actions(stmt)
+            public = _principal_is_wildcard(principal)
+            root_broad = _is_account_root_principal(principal, account_id)
+            dangerous = _actions_match(
+                acts,
+                {
+                    "secretsmanager:getsecretvalue",
+                    "secretsmanager:putsecretvalue",
+                    "secretsmanager:deletesecret",
+                    "secretsmanager:describesecret",
+                    "secretsmanager:*",
+                },
+            )
+            if not dangerous and acts:
+                dangerous = acts
+
+            if public:
+                findings.append(
+                    _finding(
+                        severity="CRITICAL",
+                        service="SecretsManager",
+                        resource=str(name),
+                        title="Secrets Manager Policy Allows Public Principal",
+                        description=(
+                            f"Secret '{name}' resource policy allows Principal '*'. "
+                            "Anyone may read or modify the secret (validation lab Step 10)."
+                        ),
+                        remediation=(
+                            f"aws secretsmanager put-resource-policy --secret-id {name} "
+                            "--resource-policy file://least-privilege-secret.json"
+                        ),
+                        compliance=["NIST 800-53 AC-3", "GDPR Art.32"],
+                        rule_id="SM-PUBLIC-POLICY",
+                        region=region,
+                        evidence={"actions": dangerous, "principal": principal},
+                    )
+                )
+            elif root_broad and dangerous:
+                # Lab Step 10 variant: overly broad account-root control
+                write_or_read = any(
+                    a
+                    in {
+                        "secretsmanager:getsecretvalue",
+                        "secretsmanager:putsecretvalue",
+                        "secretsmanager:deletesecret",
+                        "secretsmanager:*",
+                    }
+                    or a.endswith(":*")
+                    for a in (dangerous if isinstance(dangerous, list) else [])
+                ) or bool(_actions_match(acts, {
+                    "secretsmanager:getsecretvalue",
+                    "secretsmanager:putsecretvalue",
+                    "secretsmanager:deletesecret",
+                })) or "*" in acts or "secretsmanager:*" in acts
+
+                multi = len(
+                    _actions_match(
+                        acts,
+                        {
+                            "secretsmanager:getsecretvalue",
+                            "secretsmanager:putsecretvalue",
+                            "secretsmanager:deletesecret",
+                            "secretsmanager:describesecret",
+                        },
+                    )
+                ) >= 3 or "*" in acts or "secretsmanager:*" in acts
+
+                if write_or_read and multi:
+                    findings.append(
+                        _finding(
+                            severity="HIGH",
+                            service="SecretsManager",
+                            resource=str(name),
+                            title="Secrets Manager Overly Broad Resource Policy",
+                            description=(
+                                f"Secret '{name}' grants broad secretsmanager actions "
+                                f"({', '.join(dangerous) if isinstance(dangerous, list) else dangerous}) "
+                                "to the account root principal instead of a least-privilege "
+                                "application role (validation lab Step 10)."
+                            ),
+                            remediation=(
+                                f"Tighten resource policy on '{name}' to a single app role ARN; "
+                                "remove Put/Delete from root-wide grants."
+                            ),
+                            compliance=["NIST 800-53 AC-6", "CIS AWS 1.16"],
+                            rule_id="SM-OVERBROAD-POLICY",
+                            region=region,
+                            evidence={"actions": dangerous, "principal": principal},
+                        )
+                    )
+            break
+
+    return findings
+
+
 # ─── Scoring / compliance aggregation ────────────────────────────────────────
 
 def compute_score(findings: list[dict]) -> int:
@@ -810,22 +1551,62 @@ def build_remediation(findings: list[dict]) -> dict:
 # ─── Simulated vulnerable environment (fallback) ──────────────────────────────
 
 def run_simulate_scan(region: str = "us-east-1") -> dict:
-    """Moto-backed demo when real AWS credentials are unavailable."""
+    """Moto-backed demo when real AWS credentials are unavailable.
+
+    Seeds intentional lab-style misconfigs (Steps 1–10) so Demo mode
+    exercises the full rule engine without live AWS.
+    """
     from moto import mock_aws
 
     with mock_aws():
         s3 = boto3.client("s3", region_name=region)
         iam = boto3.client("iam", region_name=region)
         ec2 = boto3.client("ec2", region_name=region)
+        kms = boto3.client("kms", region_name=region)
+        sqs = boto3.client("sqs", region_name=region)
+        sm = boto3.client("secretsmanager", region_name=region)
 
-        s3.create_bucket(Bucket="vault-backups-public")
-        s3.put_bucket_acl(Bucket="vault-backups-public", ACL="public-read")
+        # Step 1 — public S3
+        s3.create_bucket(Bucket="demo-test-bucket-project")
+        s3.put_bucket_acl(Bucket="demo-test-bucket-project", ACL="public-read")
+        s3.put_bucket_policy(
+            Bucket="demo-test-bucket-project",
+            Policy=json.dumps(
+                {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Sid": "PublicReadGetObject",
+                            "Effect": "Allow",
+                            "Principal": "*",
+                            "Action": "s3:GetObject",
+                            "Resource": "arn:aws:s3:::demo-test-bucket-project/*",
+                        }
+                    ],
+                }
+            ),
+        )
         s3.create_bucket(Bucket="app-logs-unencrypted")
 
-        iam.create_user(UserName="demo-admin")
-        iam.put_user_policy(
-            UserName="demo-admin",
-            PolicyName="FullAdmin",
+        # Step 2 + 6 — admin role with wildcard trust
+        iam.create_role(
+            RoleName="demo-test-vulnerable-ec2-role",
+            AssumeRolePolicyDocument=json.dumps(
+                {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": {"AWS": "*"},
+                            "Action": "sts:AssumeRole",
+                        }
+                    ],
+                }
+            ),
+        )
+        # Local stand-in for AWS managed AdministratorAccess (moto may lack AWS managed ARNs)
+        admin_pol = iam.create_policy(
+            PolicyName="AdministratorAccess",
             PolicyDocument=json.dumps(
                 {
                     "Version": "2012-10-17",
@@ -835,8 +1616,54 @@ def run_simulate_scan(region: str = "us-east-1") -> dict:
                 }
             ),
         )
+        iam.attach_role_policy(
+            RoleName="demo-test-vulnerable-ec2-role",
+            PolicyArn=admin_pol["Policy"]["Arn"],
+        )
+
+        # Step 5 / 8 / 9 — dangerous managed policies on demo user
+        iam.create_user(UserName="demo-scanner-user")
+        for pname, actions in (
+            (
+                "test-scanner-trail-override",
+                [
+                    "cloudtrail:StopLogging",
+                    "cloudtrail:DeleteTrail",
+                    "cloudtrail:UpdateTrail",
+                ],
+            ),
+            (
+                "test-scanner-leakage-permissive-policy",
+                ["ec2:ModifyImageAttribute", "ec2:ModifySnapshotAttribute"],
+            ),
+            (
+                "test-scanner-privesc-policy",
+                ["iam:CreateUser", "iam:AttachUserPolicy", "iam:PutUserPolicy"],
+            ),
+        ):
+            pol = iam.create_policy(
+                PolicyName=pname,
+                PolicyDocument=json.dumps(
+                    {
+                        "Version": "2012-10-17",
+                        "Statement": [
+                            {
+                                "Effect": "Allow",
+                                "Action": actions,
+                                "Resource": "*",
+                            }
+                        ],
+                    }
+                ),
+            )
+            iam.attach_user_policy(
+                UserName="demo-scanner-user",
+                PolicyArn=pol["Policy"]["Arn"],
+            )
+
         iam.create_user(UserName="ci-bot")
 
+        # Step 3-ish — open SSH SG
         sg = ec2.create_security_group(
             GroupName="demo-open-ssh", Description="intentionally bad"
         )
@@ -852,12 +1679,114 @@ def run_simulate_scan(region: str = "us-east-1") -> dict:
             ],
         )
 
+        # Step 4 — KMS public key policy
+        key = kms.create_key(Description="test-scanner-exposed-key")
+        key_id = key["KeyMetadata"]["KeyId"]
+        try:
+            kms.create_alias(
+                AliasName="alias/test-scanner-exposed-key", TargetKeyId=key_id
+            )
+        except ClientError:
+            pass
+        kms.put_key_policy(
+            KeyId=key_id,
+            PolicyName="default",
+            Policy=json.dumps(
+                {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Sid": "AllowAdminFullAccess",
+                            "Effect": "Allow",
+                            "Principal": {"AWS": "arn:aws:iam::000000000000:root"},
+                            "Action": "kms:*",
+                            "Resource": "*",
+                        },
+                        {
+                            "Sid": "AllowExposedKeyUsage",
+                            "Effect": "Allow",
+                            "Principal": "*",
+                            "Action": [
+                                "kms:Encrypt",
+                                "kms:Decrypt",
+                                "kms:ReEncrypt*",
+                            ],
+                            "Resource": "*",
+                        },
+                    ],
+                }
+            ),
+        )
+
+        # Step 7 — public SQS
+        q = sqs.create_queue(QueueName="test-scanner-exposed-queue")
+        qurl = q["QueueUrl"]
+        qarn = sqs.get_queue_attributes(
+            QueueUrl=qurl, AttributeNames=["QueueArn"]
+        )["Attributes"]["QueueArn"]
+        sqs.set_queue_attributes(
+            QueueUrl=qurl,
+            Attributes={
+                "Policy": json.dumps(
+                    {
+                        "Version": "2012-10-17",
+                        "Id": "ExposedQueuePolicy",
+                        "Statement": [
+                            {
+                                "Sid": "AllowAnonymousQueueControl",
+                                "Effect": "Allow",
+                                "Principal": "*",
+                                "Action": [
+                                    "sqs:SendMessage",
+                                    "sqs:ReceiveMessage",
+                                ],
+                                "Resource": qarn,
+                            }
+                        ],
+                    }
+                )
+            },
+        )
+
+        # Step 10 — broad Secrets Manager policy
+        sec = sm.create_secret(
+            Name="test-scanner-unsecured-secret",
+            SecretString=json.dumps({"api_key": "dummy-lab-key"}),
+        )
+        sm.put_resource_policy(
+            SecretId=sec["ARN"],
+            ResourcePolicy=json.dumps(
+                {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Sid": "OverlyPermissiveInternalAccess",
+                            "Effect": "Allow",
+                            "Principal": {
+                                "AWS": "arn:aws:iam::000000000000:root"
+                            },
+                            "Action": [
+                                "secretsmanager:GetSecretValue",
+                                "secretsmanager:DescribeSecret",
+                                "secretsmanager:PutSecretValue",
+                                "secretsmanager:DeleteSecret",
+                            ],
+                            "Resource": "*",
+                        }
+                    ],
+                }
+            ),
+        )
+
         session = boto3.Session(region_name=region)
         findings: list[dict] = []
         findings.extend(check_s3(session, region))
         findings.extend(check_iam(session))
         findings.extend(check_ec2(session, region))
-        # RDS empty in moto demo is fine
+        findings.extend(check_rds(session, region))
+        findings.extend(check_kms(session, region))
+        findings.extend(check_sqs(session, region))
+        findings.extend(check_secrets_manager(session, region))
 
         conn = AwsConnectionInfo(
             mode="simulate",
@@ -930,7 +1859,7 @@ def _package_result(
             },
             {
                 "label": "SCAN ENGINE",
-                "value": "VLT-ENGINE v1.0.0",
+                "value": "VLT-ENGINE v1.3.0",
                 "state": "online",
             },
             {
@@ -973,5 +1902,8 @@ def run_scan(
     findings.extend(check_iam(session))
     findings.extend(check_ec2(session, region))
     findings.extend(check_rds(session, region))
+    findings.extend(check_kms(session, region))
+    findings.extend(check_sqs(session, region))
+    findings.extend(check_secrets_manager(session, region))
 
     return _package_result(findings, conn, region)

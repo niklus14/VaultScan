@@ -15,7 +15,17 @@ from typing import Any
 
 from config import settings
 
-_DATA_DIR = Path(__file__).resolve().parent / "data"
+
+def _resolve_data_dir() -> Path:
+    """Use /tmp on Vercel (read-only deployment FS); local backend/data otherwise."""
+    if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
+        d = Path(os.environ.get("VAULTSCAN_DATA_DIR", "/tmp/vaultscan-data"))
+    else:
+        d = Path(os.environ.get("VAULTSCAN_DATA_DIR", Path(__file__).resolve().parent / "data"))
+    return d
+
+
+_DATA_DIR = _resolve_data_dir()
 _STORE_PATH = _DATA_DIR / "connection.json"
 _LOCK = threading.Lock()
 
