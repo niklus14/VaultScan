@@ -993,7 +993,7 @@ def remediate_apply(body: RemediateJobRequest):
         "cli_script": cli_script,
         "message": (
             f"Applied {applied} fix(es) via {label}.{fail_note} "
-            "Re-scan uses live AWS. Make as before undoes this job when snapshots exist."
+            "Re-scan uses live AWS. Please make it as before undoes this job when snapshots exist."
         ),
     }
 
@@ -1040,7 +1040,7 @@ def remediate_rollback(body: RemediateRollbackRequest):
         "job": job,
         "rescan": rescan,
         "session_mode": label,
-        "message": "Restored previous configuration where snapshots allowed (make as before).",
+        "message": "Restored previous configuration where snapshots allowed (Please make it as before).",
     }
 
 

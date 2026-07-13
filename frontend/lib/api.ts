@@ -623,7 +623,7 @@ export function applyRemediation(body: {
   });
 }
 
-/** Restore resources as they were before the job (“make as before”). */
+/** Restore resources as they were before the job (“Please make it as before”). */
 export function rollbackRemediation(body: {
   job_id: string;
   action_ids?: string[];

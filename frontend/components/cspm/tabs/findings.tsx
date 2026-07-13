@@ -76,7 +76,7 @@ export function FindingsTab() {
       }
       setFixMsg(
         appliedN > 0
-          ? "Fix applied and scan refreshed. Open Fixing options to undo with Make as before."
+          ? "Fix applied and scan refreshed. Open Fixing options to undo with Please make it as before."
           : "No auto-apply path for this finding — see Fixing options or use the CLI hint.",
       );
     } catch (e) {

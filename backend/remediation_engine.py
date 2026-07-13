@@ -1649,13 +1649,28 @@ def apply_one(
         elif "AccessDenied" in err or "UnauthorizedOperation" in err or "not authorized" in err.lower():
             a["error"] = (
                 f"AWS denied this write ({rid} on {resource}). "
-                "Apply uses AssumeRole into your Settings Role ARN (same as scan). "
-                "That role (or your keys) need iam/s3/ec2 write on the lab resources. "
+                "You are acting as the **scan Role** after AssumeRole. That role’s "
+                "identity policy must allow the write (e.g. iam:UpdateAssumeRolePolicy, "
+                "iam:DetachRolePolicy / DetachUserPolicy, s3:Put*, ec2:Revoke*). "
+                "If the lab role only has SecurityAudit/read, attach AdministratorAccess "
+                "or a remediator policy for the lab, then retry. "
                 f"Detail: {err}"
             )
         else:
             a["error"] = err
     return a
+
+
+def _format_access_denied(operation: str, rid: str, resource: str, err: str) -> str:
+    return (
+        f"AWS AccessDenied on {operation} for {rid} ({resource}). "
+        "Caller is your Settings Role (AssumeRole session). That role needs "
+        "permission in its **identity policy**, not only a trust policy. "
+        "Example for trust rollback: iam:UpdateAssumeRolePolicy on this role. "
+        "Lab fix: attach AdministratorAccess (or IAM write) to the role, retry "
+        "Please make it as before, or run the CLI with a user that has IAM admin. "
+        f"AWS: {err}"
+    )
 
 
 def rollback_one(
@@ -1664,7 +1679,7 @@ def rollback_one(
     *,
     simulate: bool,
 ) -> dict[str, Any]:
-    """Restore pre-apply snapshot — 'make as before'."""
+    """Restore pre-apply snapshot — Please make it as before."""
     a = deepcopy(action)
     snap = a.get("snapshot") or {}
     rid = (a.get("rule_id") or "").upper()

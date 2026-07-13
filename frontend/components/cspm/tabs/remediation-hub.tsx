@@ -434,7 +434,7 @@ export function RemediationHubTab() {
                   Fixing options
                 </h2>
                 <p className="text-xs text-muted-foreground">
-                  Plan → apply real AWS fixes → re-scan · undo with Make as before
+                  Plan → apply → re-scan · undo with “Please make it as before”
                 </p>
               </div>
             </div>
@@ -601,7 +601,7 @@ export function RemediationHubTab() {
             ) : (
               <RotateCcw className="size-4" />
             )}
-            Make as before
+            Please make it as before
           </button>
         </div>
 
@@ -769,7 +769,7 @@ export function RemediationHubTab() {
                 "Dry-run previews without changing AWS",
                 "Apply runs allowlisted writes (type APPLY if dangerous)",
                 "Re-scan proves posture improved",
-                "Make as before restores snapshots from this job",
+                "Please make it as before restores snapshots from this job",
               ].map((t, i) => (
                 <li key={t} className="flex gap-3 text-sm leading-snug text-muted-foreground">
                   <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-white/5 text-[11px] font-bold text-foreground/80 ring-1 ring-white/10">
