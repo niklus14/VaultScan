@@ -13,11 +13,18 @@ const ubuntuMono = Ubuntu_Mono({
   subsets: ["latin"],
 });
 
+const siteUrl =
+  process.env.NEXT_PUBLIC_SITE_URL ||
+  (process.env.VERCEL_URL
+    ? `https://${process.env.VERCEL_URL}`
+    : "http://localhost:3000");
+
 export const metadata: Metadata = {
+  metadataBase: new URL(siteUrl),
   title: "V.A.U.L.T.S.C.A.N. — Cloud Security Posture Management",
   description:
     "Enterprise SOC command console for cloud security posture management, vulnerability tracking, and compliance monitoring.",
-  generator: "v0.app",
+  generator: "VaultScan",
 };
 
 export default function RootLayout({
