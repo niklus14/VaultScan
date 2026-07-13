@@ -434,6 +434,81 @@ async def enrich_fix_actions(
         return actions
 
 
+async def generate_fix_report_narrative(
+    report: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    AI narrative for a remediation change report.
+    Returns executive_summary, recommendations[], and per-action change_stories.
+    """
+    if not settings.grok_api_key:
+        return {}
+
+    lines = []
+    for i, c in enumerate((report.get("changes") or [])[:16], 1):
+        lines.append(
+            f"{i}. rule={c.get('rule_id')} resource={c.get('resource')} "
+            f"status={c.get('status')} risk={c.get('risk')}\n"
+            f"   before={str(c.get('before') or '')[:280]}\n"
+            f"   changed={str(c.get('what_changed') or '')[:220]}\n"
+            f"   after={str(c.get('after') or '')[:220]}"
+        )
+    counts = report.get("counts") or {}
+    user_content = (
+        "Write a remediation change report narrative for a security lab demo.\n"
+        "Return ONLY a JSON object with:\n"
+        '  "executive_summary": string (3-6 sentences, before vs after posture),\n'
+        '  "recommendations": string[] (3-6 concrete next steps),\n'
+        '  "change_stories": array of {"rule_id": string, "resource": string, '
+        '"story": string} — short plain-language story of what changed for key items.\n'
+        "Do not invent resources. Never mention model vendors.\n\n"
+        f"Job {report.get('job_id')} score {report.get('score_before')} → "
+        f"{report.get('score_after')} (delta {report.get('score_delta')}). "
+        f"Counts: {counts}.\n\nCHANGES:\n" + "\n".join(lines)
+    )
+    messages = [
+        {
+            "role": "system",
+            "content": SYSTEM_PROMPT
+            + "\nYou produce executive remediation reports. Return ONLY valid JSON.",
+        },
+        {"role": "user", "content": user_content},
+    ]
+    try:
+        raw = await chat_completion(messages, temperature=0.3, max_tokens=2000)
+        text = raw.strip()
+        if text.startswith("```"):
+            import re
+
+            text = re.sub(r"^```(?:json)?\s*", "", text)
+            text = re.sub(r"\s*```$", "", text)
+        data = json.loads(text)
+        if not isinstance(data, dict):
+            # try extract object
+            import re
+
+            m = re.search(r"\{[\s\S]*\}", raw)
+            data = json.loads(m.group(0)) if m else {}
+        out: dict[str, Any] = {}
+        if isinstance(data.get("executive_summary"), str):
+            out["executive_summary"] = data["executive_summary"].strip()
+        recs = data.get("recommendations")
+        if isinstance(recs, list):
+            out["recommendations"] = [
+                str(x).strip() for x in recs if str(x).strip()
+            ][:8]
+        stories = data.get("change_stories")
+        if isinstance(stories, list):
+            out["change_stories"] = [
+                s
+                for s in stories
+                if isinstance(s, dict) and s.get("rule_id")
+            ][:16]
+        return out
+    except Exception:
+        return {}
+
+
 def _parse_json_array(text: str) -> list[Any] | None:
     import re
 

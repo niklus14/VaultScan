@@ -27,9 +27,12 @@ import {
   applyRemediation,
   rollbackRemediation,
   listRemediationJobs,
+  getRemediationReport,
   type RemediateJob,
   type FixAction,
+  type FixChangeReport,
 } from "@/lib/api";
+import { FixChangeReportPanel } from "./fix-change-report";
 import { cn } from "@/lib/utils";
 
 const riskStyle: Record<string, string> = {
@@ -221,6 +224,8 @@ export function RemediationHubTab() {
   const [cliScript, setCliScript] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [cliOpen, setCliOpen] = useState(false);
+  const [fixReport, setFixReport] = useState<FixChangeReport | null>(null);
+  const [reportBusy, setReportBusy] = useState(false);
 
   const refreshJobs = useCallback(async () => {
     try {
@@ -362,10 +367,35 @@ export function RemediationHubTab() {
     }
   };
 
+  const generateReport = async () => {
+    if (!job) return;
+    setReportBusy(true);
+    setError(null);
+    try {
+      const res = await getRemediationReport({
+        job_id: job.job_id,
+        use_ai: useAi,
+      });
+      setFixReport(res.report);
+      if (res.report.cli_script) setCliScript(res.report.cli_script);
+      setMessage(
+        res.ai_used
+          ? "Fix change report ready (Cloud Assistant narrative included)."
+          : "Fix change report ready (template summary — enable Assistant notes for AI).",
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Report generation failed");
+    } finally {
+      setReportBusy(false);
+    }
+  };
+
   const makeAsBefore = async () => {
     if (!job) return;
     if (phrase.trim().toUpperCase() !== "ROLLBACK") {
-      setError("Type ROLLBACK to restore the previous configuration.");
+      setError(
+        'Type ROLLBACK to confirm “Please make it as before”.',
+      );
       return;
     }
     setBusy("rollback");
@@ -379,7 +409,9 @@ export function RemediationHubTab() {
         rescan: true,
       });
       setJob(res.job);
-      setMessage(res.message || "Restored previous configuration.");
+      setMessage(
+        res.message || "Please make it as before — previous configuration restored.",
+      );
       if (res.rescan && "scan_id" in res.rescan) {
         useScanStore.setState({ scan: res.rescan as never });
       } else {
@@ -644,6 +676,14 @@ export function RemediationHubTab() {
           </div>
         )}
       </section>
+
+      {/* Fix change report */}
+      <FixChangeReportPanel
+        report={fixReport}
+        loading={reportBusy}
+        canGenerate={!!job}
+        onGenerate={() => void generateReport()}
+      />
 
       <div className="grid gap-5 lg:grid-cols-12">
         {/* Main list */}

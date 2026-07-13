@@ -554,6 +554,67 @@ export interface RemediateJob {
   rollback_available?: boolean;
   cli_script?: string;
   code_version?: string;
+  fix_report?: FixChangeReport;
+}
+
+export interface FixChangeEntry {
+  action_id?: string;
+  rule_id?: string;
+  resource?: string;
+  title?: string;
+  summary?: string;
+  risk?: FixRisk;
+  severity?: string;
+  status?: FixActionStatus;
+  before?: string;
+  what_changed?: string;
+  after?: string;
+  cli_commands?: string[];
+  cli_text?: string;
+  ai_notes?: string | null;
+  ai_story?: string;
+  preview?: string | null;
+  error?: string | null;
+}
+
+export interface FixChangeReport {
+  report_id: string;
+  generated_at: string;
+  job_id?: string;
+  scan_id?: string;
+  job_status?: string;
+  score_before?: number | null;
+  score_after?: number | null;
+  score_delta?: number | null;
+  counts: {
+    total: number;
+    applied: number;
+    failed: number;
+    skipped: number;
+    rolled_back: number;
+  };
+  executive_summary: string;
+  recommendations: string[];
+  changes: FixChangeEntry[];
+  cli_script?: string;
+  ai_used?: boolean;
+}
+
+export function getRemediationReport(body: {
+  job_id: string;
+  use_ai?: boolean;
+}) {
+  return request<{
+    ok: boolean;
+    report: FixChangeReport;
+    ai_used: boolean;
+  }>("/api/remediate/report", {
+    method: "POST",
+    body: JSON.stringify({
+      job_id: body.job_id,
+      use_ai: body.use_ai ?? true,
+    }),
+  });
 }
 
 export function planRemediation(body: {

@@ -25,9 +25,11 @@ from grok_client import (
     assistant_reply,
     enrich_attack_paths,
     enrich_fix_actions,
+    generate_fix_report_narrative,
     generate_report_narrative,
     summarize_scan,
 )
+import remediation_report
 from report_export import build_report_context, export_docx, export_pdf
 import remediation_engine
 import scan_persistence
@@ -1047,6 +1049,55 @@ def remediate_rollback(body: RemediateRollbackRequest):
 @app.get("/api/remediate/jobs")
 def remediate_jobs():
     return {"jobs": remediation_engine.list_jobs()}
+
+
+class RemediateReportRequest(BaseModel):
+    job_id: str
+    use_ai: bool = True
+
+
+@app.post("/api/remediate/report")
+async def remediate_report(body: RemediateReportRequest):
+    """
+    Fix change report: how it was before, what changed, after state, CLI, AI notes.
+    """
+    job = remediation_engine.get_job(body.job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Remediation job not found") from None
+
+    report = remediation_report.build_fix_report(job)
+    ai_used = False
+    if body.use_ai and settings.grok_api_key:
+        try:
+            narrative = await generate_fix_report_narrative(report)
+            if narrative.get("executive_summary"):
+                report["executive_summary"] = narrative["executive_summary"]
+                ai_used = True
+            if narrative.get("recommendations"):
+                report["recommendations"] = narrative["recommendations"]
+                ai_used = True
+            stories = {
+                (str(s.get("rule_id")), str(s.get("resource") or "")): s.get("story")
+                for s in (narrative.get("change_stories") or [])
+                if isinstance(s, dict)
+            }
+            if stories:
+                for ch in report.get("changes") or []:
+                    key = (str(ch.get("rule_id")), str(ch.get("resource") or ""))
+                    story = stories.get(key) or stories.get((str(ch.get("rule_id")), ""))
+                    if story:
+                        ch["ai_story"] = story
+                ai_used = True
+        except Exception:
+            pass
+    report["ai_used"] = ai_used
+    # persist on job for reopen
+    try:
+        job["fix_report"] = report
+        remediation_engine._upsert_job(job)
+    except Exception:
+        pass
+    return {"ok": True, "report": report, "ai_used": ai_used}
 
 
 @app.get("/api/remediate/jobs/{job_id}")
