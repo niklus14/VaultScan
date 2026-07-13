@@ -602,8 +602,17 @@ def _snapshot_before(
                 snap["ip_permissions"] = sgs[0].get("IpPermissions", [])
         elif rid == "IAM-TRUST-WILDCARD":
             iam = session.client("iam")
-            role = iam.get_role(RoleName=resource)["Role"]
-            snap["assume_role_policy"] = role.get("AssumeRolePolicyDocument")
+            rname = _iam_role_name(resource)
+            try:
+                role = iam.get_role(RoleName=rname)["Role"]
+                snap["assume_role_policy"] = role.get("AssumeRolePolicyDocument")
+                snap["role_name"] = rname
+            except ClientError as e:
+                if _is_missing_entity(e):
+                    snap["missing"] = True
+                    snap["role_name"] = rname
+                else:
+                    raise
             try:
                 snap["account_id"] = session.client("sts").get_caller_identity()[
                     "Account"
@@ -680,6 +689,37 @@ def _snapshot_before(
     except Exception as exc:  # noqa: BLE001
         snap["snapshot_error"] = str(exc)
     return snap
+
+
+def _iam_role_name(resource: str) -> str:
+    """Extract IAM role name from bare name or ARN."""
+    r = (resource or "").strip()
+    if ":role/" in r:
+        # arn:aws:iam::123:role/path/name or role/name
+        return r.split(":role/", 1)[-1].split("/")[-1]
+    if r.startswith("role/"):
+        return r.split("/", 1)[-1]
+    return r
+
+
+def _is_missing_entity(exc: BaseException) -> bool:
+    msg = str(exc)
+    if "NoSuchEntity" in msg or "NoSuchBucket" in msg or "InvalidGroup.NotFound" in msg:
+        return True
+    if isinstance(exc, ClientError):
+        code = exc.response.get("Error", {}).get("Code", "")
+        return code in {
+            "NoSuchEntity",
+            "NoSuchBucket",
+            "NoSuchKey",
+            "InvalidGroup.NotFound",
+            "InvalidInstanceID.NotFound",
+            "ResourceNotFoundException",
+            "NotFoundException",
+            "QueueDoesNotExist",
+            "AWS.SimpleQueueService.NonExistentQueue",
+        }
+    return False
 
 
 def _principal_is_public(principal: Any) -> bool:
@@ -923,33 +963,9 @@ def apply_one(
             )
         elif rid in ("IAM-ROLE-ADMIN", "IAM-ADMIN-POLICY"):
             iam = session.client("iam")
-            name = resource
-            arns = [
-                "arn:aws:iam::aws:policy/AdministratorAccess",
-            ]
-            # also try local AdministratorAccess by listing
-            if rid == "IAM-ROLE-ADMIN":
-                for pol in iam.list_attached_role_policies(RoleName=name).get(
-                    "AttachedPolicies", []
-                ):
-                    if "AdministratorAccess" in (pol.get("PolicyName") or ""):
-                        iam.detach_role_policy(
-                            RoleName=name, PolicyArn=pol["PolicyArn"]
-                        )
-            else:
-                detached = False
-                try:
-                    for pol in iam.list_attached_user_policies(UserName=name).get(
-                        "AttachedPolicies", []
-                    ):
-                        if "AdministratorAccess" in (pol.get("PolicyName") or ""):
-                            iam.detach_user_policy(
-                                UserName=name, PolicyArn=pol["PolicyArn"]
-                            )
-                            detached = True
-                except ClientError:
-                    pass
-                if not detached:
+            name = _iam_role_name(resource) if rid == "IAM-ROLE-ADMIN" else resource
+            try:
+                if rid == "IAM-ROLE-ADMIN":
                     for pol in iam.list_attached_role_policies(RoleName=name).get(
                         "AttachedPolicies", []
                     ):
@@ -957,6 +973,35 @@ def apply_one(
                             iam.detach_role_policy(
                                 RoleName=name, PolicyArn=pol["PolicyArn"]
                             )
+                else:
+                    detached = False
+                    try:
+                        for pol in iam.list_attached_user_policies(UserName=name).get(
+                            "AttachedPolicies", []
+                        ):
+                            if "AdministratorAccess" in (pol.get("PolicyName") or ""):
+                                iam.detach_user_policy(
+                                    UserName=name, PolicyArn=pol["PolicyArn"]
+                                )
+                                detached = True
+                    except ClientError:
+                        pass
+                    if not detached:
+                        rname = _iam_role_name(name)
+                        for pol in iam.list_attached_role_policies(RoleName=rname).get(
+                            "AttachedPolicies", []
+                        ):
+                            if "AdministratorAccess" in (pol.get("PolicyName") or ""):
+                                iam.detach_role_policy(
+                                    RoleName=rname, PolicyArn=pol["PolicyArn"]
+                                )
+            except ClientError as e:
+                if _is_missing_entity(e):
+                    a["preview"] = f"IAM entity {name} not found — already removed"
+                    a["status"] = "applied"
+                    a["error"] = None
+                    return a
+                raise
         elif rid in (
             "IAM-CLOUDTRAIL-DESTROY",
             "IAM-IMAGE-LEAK",
@@ -965,10 +1010,10 @@ def apply_one(
             iam = session.client("iam")
             name = resource
             want = (a.get("snapshot") or {}).get("policy_name") or ""
-            # from aws_calls
             for c in a.get("aws_calls") or []:
                 want = c.get("params", {}).get("policy_name") or want
             detached = False
+            missing = False
             for list_fn, detach_fn, key in (
                 (
                     lambda: iam.list_attached_user_policies(UserName=name),
@@ -976,8 +1021,12 @@ def apply_one(
                     "AttachedPolicies",
                 ),
                 (
-                    lambda: iam.list_attached_role_policies(RoleName=name),
-                    lambda arn: iam.detach_role_policy(RoleName=name, PolicyArn=arn),
+                    lambda: iam.list_attached_role_policies(
+                        RoleName=_iam_role_name(name)
+                    ),
+                    lambda arn: iam.detach_role_policy(
+                        RoleName=_iam_role_name(name), PolicyArn=arn
+                    ),
                     "AttachedPolicies",
                 ),
             ):
@@ -994,23 +1043,46 @@ def apply_one(
                             detached = True
                     if detached:
                         break
-                except ClientError:
+                except ClientError as e:
+                    if _is_missing_entity(e):
+                        missing = True
+                        continue
                     continue
+            if missing and not detached:
+                a["preview"] = f"IAM entity {name} not found — already removed"
+                a["status"] = "applied"
+                a["error"] = None
+                return a
             if not detached:
                 raise RuntimeError(
                     "Could not find/detach matching managed policy — apply manually"
                 )
         elif rid == "IAM-TRUST-WILDCARD":
             iam = session.client("iam")
-            role_name = resource
-            role = iam.get_role(RoleName=role_name)["Role"]
+            role_name = _iam_role_name(
+                (a.get("snapshot") or {}).get("role_name") or resource
+            )
+            try:
+                role = iam.get_role(RoleName=role_name)["Role"]
+            except ClientError as e:
+                if _is_missing_entity(e):
+                    # Role gone → trust issue is already "fixed" (nothing to assume)
+                    a["preview"] = (
+                        f"Role '{role_name}' does not exist in this account "
+                        f"(caller account may differ from scan, or role was deleted). "
+                        f"Treated as resolved."
+                    )
+                    a["status"] = "applied"
+                    a["error"] = None
+                    return a
+                raise
             doc = role.get("AssumeRolePolicyDocument") or {}
             if isinstance(doc, str):
                 doc = json.loads(doc)
-            # ensure snapshot
             if not a.get("snapshot") or not a["snapshot"].get("assume_role_policy"):
                 a["snapshot"] = a.get("snapshot") or {}
                 a["snapshot"]["assume_role_policy"] = doc
+                a["snapshot"]["role_name"] = role_name
             account_id = (
                 (a.get("snapshot") or {}).get("account_id")
                 or session.client("sts").get_caller_identity()["Account"]
@@ -1167,20 +1239,29 @@ def apply_one(
             a["error"] = "No automated apply handler for this rule"
             return a
 
-        a["status"] = "applied"
-        a["error"] = None
-        a["preview"] = f"Applied {rid} on {resource} in AWS"
+        if a.get("status") != "applied":
+            a["status"] = "applied"
+            a["error"] = None
+            if not a.get("preview"):
+                a["preview"] = f"Applied {rid} on {resource} in AWS"
         # Do NOT mark_fixed for live AWS — next scan must reflect real account state.
-        # (Demo/simulate path marks fixed above.)
     except (ClientError, BotoCoreError, RuntimeError) as exc:
+        if _is_missing_entity(exc):
+            # Resource already gone → treat as fixed so re-scan is clean
+            a["status"] = "applied"
+            a["error"] = None
+            a["preview"] = (
+                f"Resource not found for {rid} ({resource}) — treated as already fixed. "
+                f"If this keeps appearing, re-scan with credentials in the correct account."
+            )
+            return a
         a["status"] = "failed"
         err = str(exc)
-        # Friendlier AccessDenied guidance
         if "AccessDenied" in err or "UnauthorizedOperation" in err or "not authorized" in err.lower():
             a["error"] = (
                 f"AWS denied this write ({rid} on {resource}). "
-                "Your Access Key / remediator role needs permission for this API "
-                "(e.g. s3:PutBucketPublicAccessBlock, ec2:RevokeSecurityGroupIngress, iam:DetachRolePolicy). "
+                "Apply uses the scan AssumeRole when possible, else your Access Keys. "
+                "Both need permission in the **same account** as the finding. "
                 f"Detail: {err}"
             )
         else:

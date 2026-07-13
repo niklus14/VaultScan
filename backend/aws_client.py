@@ -189,10 +189,10 @@ def get_remediate_session(
 
     Returns (session, mode_label, error).
 
-    Real AWS behavior:
-    - Prefer optional remediator_role_arn (AssumeRole with write policies)
-    - Else use **base Access Key session** (direct), NOT the read-only scan role
-    - Scan role from Settings is typically SecurityAudit/read-only and cannot remediate
+    Priority for real AWS:
+    1. Optional remediator_role_arn
+    2. **Same AssumeRole as scan** (lab roles often have write; resources live in that account)
+    3. Base Access Key session (direct) — same account as the keys
     """
     rt = resolve_runtime()
     auth_mode = rt.get("auth_mode") or "simulate"
@@ -205,25 +205,24 @@ def get_remediate_session(
         return (
             None,
             auth_mode,
-            "Write remediations require allow_write_with_scan_creds=true. "
-            "Your scan role is usually read-only; apply uses base Access Keys or a remediator role.",
+            "Write remediations require allow_write=true.",
         )
 
     if not rt.get("access_key_id") or not rt.get("secret_access_key"):
         return (
             None,
             auth_mode,
-            "No Access Key/Secret in Settings. Save IAM credentials that are allowed to modify the resources you want fixed.",
+            "No Access Key/Secret in Settings. Save IAM credentials that can modify the target account.",
         )
 
     base = _base_session(rt)
-    # Optional dedicated remediator role
-    role = (remediator_role_arn or rt.get("remediator_role_arn") or "").strip()
-    if role and ":role/" in role:
+    errors: list[str] = []
+
+    def _assume(role_arn: str, label: str) -> tuple[boto3.Session | None, str, str | None]:
         try:
             sts = base.client("sts", config=Config(retries={"max_attempts": 3}))
             params: dict[str, Any] = {
-                "RoleArn": role,
+                "RoleArn": role_arn,
                 "RoleSessionName": (rt.get("session_name") or "VaultScanRemediate")[:64],
                 "DurationSeconds": 3600,
             }
@@ -238,17 +237,38 @@ def get_remediate_session(
                 aws_session_token=creds["SessionToken"],
                 region_name=region,
             )
-            return session, "remediator_role", None
+            # prove identity
+            session.client("sts").get_caller_identity()
+            return session, label, None
         except (ClientError, BotoCoreError) as exc:
-            return None, "remediator_role", f"Failed to assume remediator role: {exc}"
+            return None, label, str(exc)
 
-    # Default: use base keys directly (do NOT use read-only scan AssumeRole)
+    # 1) Explicit remediator role
+    role = (remediator_role_arn or rt.get("remediator_role_arn") or "").strip()
+    if role and ":role/" in role:
+        sess, label, err = _assume(role, "remediator_role")
+        if sess:
+            return sess, label, None
+        if err:
+            errors.append(f"remediator role: {err}")
+
+    # 2) Same role used for scanning (resources are in that account; lab admin roles can write)
+    scan_role = (rt.get("role_arn") or "").strip()
+    if auth_mode == "assume_role" and scan_role and ":role/" in scan_role:
+        sess, label, err = _assume(scan_role, "scan_assume_role")
+        if sess:
+            return sess, label, None
+        if err:
+            errors.append(f"scan role assume: {err}")
+
+    # 3) Base access keys (must be same account as the resources)
     try:
         sts = base.client("sts")
-        sts.get_caller_identity()
-        return base, "direct_keys", None
+        ident = sts.get_caller_identity()
+        return base, f"direct_keys:{ident.get('Account')}", None
     except (ClientError, BotoCoreError) as exc:
-        return None, "direct_keys", f"Base credentials rejected: {exc}"
+        errors.append(f"direct keys: {exc}")
+        return None, "direct_keys", " | ".join(errors)
 
 
 def probe_connection(

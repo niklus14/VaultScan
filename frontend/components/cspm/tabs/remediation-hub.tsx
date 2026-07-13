@@ -305,8 +305,9 @@ export function RemediationHubTab() {
             </span>
           ) : (
             <span className="rounded border border-warning/30 bg-warning/10 px-2 py-1 font-mono text-[10px] text-warning">
-              REAL AWS — Apply uses your Access Key user (not the read-only scan
-              role). That user needs write IAM (S3/EC2/IAM as needed).
+              REAL AWS — Apply prefers the same AssumeRole as scan (target
+              account), then your Access Keys. Keys + role must be in the account
+              where findings live.
             </span>
           )}
         </div>
