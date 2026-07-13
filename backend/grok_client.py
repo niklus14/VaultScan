@@ -371,6 +371,69 @@ async def enrich_attack_paths(
         return enriched
 
 
+async def enrich_fix_actions(
+    actions: list[dict[str, Any]],
+    scan: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """
+    Optionally add AI notes (why this fix, order, risk caveats) to planned actions.
+    Never invent resources; registry remains source of truth for auto_applicable.
+    """
+    if not settings.grok_api_key or not actions:
+        return actions
+
+    brief = []
+    for i, a in enumerate(actions[:20], 1):
+        brief.append(
+            f"{i}. action_id={a.get('action_id')} rule={a.get('rule_id')} "
+            f"resource={a.get('resource')} risk={a.get('risk')} "
+            f"auto={a.get('auto_applicable')} summary={a.get('summary')}"
+        )
+    ctx = findings_context(scan) if scan else ""
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                SYSTEM_PROMPT
+                + "\nYou help prioritize AWS remediations. Return ONLY a JSON array. "
+                "Do not invent resources. Never mention model vendors."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                "For each action below, return a JSON array of objects with:\n"
+                '  "action_id": string,\n'
+                '  "ai_notes": string (2-4 sentences: why fix, blast radius, order tip),\n'
+                '  "priority": number (1=first)\n'
+                "Only use the action_ids provided.\n\n"
+                f"ACTIONS:\n" + "\n".join(brief) + f"\n\nCONTEXT:\n{ctx[:3000]}"
+            ),
+        },
+    ]
+    try:
+        raw = await chat_completion(messages, temperature=0.25, max_tokens=1800)
+        parsed = _parse_json_array(raw)
+        if not parsed:
+            return actions
+        by_id = {str(x.get("action_id")): x for x in parsed if isinstance(x, dict)}
+        out = []
+        for a in actions:
+            item = dict(a)
+            extra = by_id.get(str(a.get("action_id")))
+            if extra and isinstance(extra.get("ai_notes"), str):
+                item["ai_notes"] = extra["ai_notes"].strip()
+            if extra and isinstance(extra.get("priority"), (int, float)):
+                item["_ai_priority"] = int(extra["priority"])
+            out.append(item)
+        out.sort(key=lambda x: x.get("_ai_priority", 99))
+        for x in out:
+            x.pop("_ai_priority", None)
+        return out
+    except Exception:
+        return actions
+
+
 def _parse_json_array(text: str) -> list[Any] | None:
     import re
 

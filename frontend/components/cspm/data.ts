@@ -5,8 +5,9 @@ export const NAV_ITEMS = [
   { id: "overview", label: "OVERVIEW", code: "01" },
   { id: "findings", label: "FINDINGS", code: "02" },
   { id: "attackpaths", label: "ATTACK PATHS", code: "03" },
-  { id: "history", label: "SCAN HISTORY", code: "04" },
-  { id: "settings", label: "SETTINGS", code: "05" },
+  { id: "remediate", label: "AI FIX", code: "04" },
+  { id: "history", label: "SCAN HISTORY", code: "05" },
+  { id: "settings", label: "SETTINGS", code: "06" },
 ] as const;
 
 export type TabId = (typeof NAV_ITEMS)[number]["id"];

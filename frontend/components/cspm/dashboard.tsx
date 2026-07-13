@@ -8,6 +8,7 @@ import {
   History,
   FileText,
   Settings2,
+  Wrench,
 } from "lucide-react";
 import { Sidebar } from "./sidebar";
 import { ScanReport } from "./scan-report";
@@ -15,6 +16,7 @@ import { AiAssistant } from "./ai-assistant";
 import { OverviewTab } from "./tabs/overview";
 import { FindingsTab } from "./tabs/findings";
 import { AttackPathsTab } from "./tabs/attack-paths";
+import { RemediationHubTab } from "./tabs/remediation-hub";
 import { ScanHistoryTab } from "./tabs/scan-history";
 import { SettingsTab } from "./tabs/settings";
 import { type TabId } from "./data";
@@ -27,6 +29,7 @@ const pageMeta: Record<
   overview: { title: "OVERVIEW", icon: LayoutGrid },
   findings: { title: "FINDINGS", icon: ShieldAlert },
   attackpaths: { title: "ATTACK PATHS", icon: GitBranch },
+  remediate: { title: "AI FIX", icon: Wrench },
   history: { title: "SCAN HISTORY", icon: History },
   settings: { title: "SETTINGS", icon: Settings2 },
 };
@@ -122,6 +125,7 @@ export function Dashboard() {
           {active === "overview" && <OverviewTab />}
           {active === "findings" && <FindingsTab />}
           {active === "attackpaths" && <AttackPathsTab />}
+          {active === "remediate" && <RemediationHubTab />}
           {active === "history" && <ScanHistoryTab />}
           {active === "settings" && <SettingsTab />}
         </div>

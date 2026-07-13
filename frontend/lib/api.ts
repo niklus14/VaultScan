@@ -453,3 +453,141 @@ export function clearConnectionCredentials() {
     method: "DELETE",
   });
 }
+
+/* ─── AI remediation ─────────────────────────────────────────────────────── */
+
+export type FixRisk = "safe" | "elevated" | "dangerous";
+export type FixActionStatus =
+  | "planned"
+  | "dry_run_ok"
+  | "dry_run_fail"
+  | "applied"
+  | "failed"
+  | "skipped"
+  | "rolled_back"
+  | "rollback_failed";
+
+export interface FixAction {
+  action_id: string;
+  rule_id: string;
+  finding_id: string;
+  resource: string;
+  title: string;
+  risk: FixRisk;
+  summary: string;
+  auto_applicable: boolean;
+  requires_confirm: boolean;
+  cli_hint?: string;
+  steps?: string[];
+  status: FixActionStatus;
+  preview?: string | null;
+  error?: string | null;
+  ai_notes?: string | null;
+  region?: string;
+  service?: string;
+  severity?: string;
+}
+
+export interface RemediateJob {
+  job_id: string;
+  created_at: string;
+  updated_at?: string;
+  scan_id?: string;
+  mode: string;
+  status: string;
+  ai_used?: boolean;
+  actions: FixAction[];
+  score_before?: number | null;
+  score_after?: number | null;
+  rollback_available?: boolean;
+}
+
+export function planRemediation(body: {
+  scan_id?: string | null;
+  finding_ids?: string[];
+  mode?: "all_safe" | "selected" | "all";
+  use_ai?: boolean;
+}) {
+  return request<{
+    ok: boolean;
+    job: RemediateJob;
+    ai_used: boolean;
+    counts: { total: number; auto: number; safe: number };
+  }>("/api/remediate/plan", {
+    method: "POST",
+    body: JSON.stringify({
+      scan_id: body.scan_id ?? null,
+      finding_ids: body.finding_ids ?? null,
+      mode: body.mode ?? "all_safe",
+      use_ai: body.use_ai ?? true,
+    }),
+  });
+}
+
+export function dryRunRemediation(jobId: string) {
+  return request<{ ok: boolean; job: RemediateJob }>("/api/remediate/dry-run", {
+    method: "POST",
+    body: JSON.stringify({ job_id: jobId }),
+  });
+}
+
+export function applyRemediation(body: {
+  job_id: string;
+  confirm?: boolean;
+  confirm_phrase?: string;
+  only_safe?: boolean;
+  allow_write_with_scan_creds?: boolean;
+  rescan?: boolean;
+}) {
+  return request<{
+    ok: boolean;
+    job: RemediateJob;
+    rescan?: ScanResult | { error: string };
+    message?: string;
+  }>("/api/remediate/apply", {
+    method: "POST",
+    body: JSON.stringify({
+      job_id: body.job_id,
+      confirm: body.confirm ?? true,
+      confirm_phrase: body.confirm_phrase ?? null,
+      only_safe: body.only_safe ?? false,
+      allow_write_with_scan_creds: body.allow_write_with_scan_creds ?? false,
+      rescan: body.rescan ?? true,
+    }),
+  });
+}
+
+/** Restore resources as they were before the job (“make as before”). */
+export function rollbackRemediation(body: {
+  job_id: string;
+  action_ids?: string[];
+  confirm?: boolean;
+  confirm_phrase?: string;
+  allow_write_with_scan_creds?: boolean;
+  rescan?: boolean;
+}) {
+  return request<{
+    ok: boolean;
+    job: RemediateJob;
+    rescan?: ScanResult | { error: string };
+    message?: string;
+  }>("/api/remediate/rollback", {
+    method: "POST",
+    body: JSON.stringify({
+      job_id: body.job_id,
+      action_ids: body.action_ids ?? null,
+      confirm: body.confirm ?? true,
+      confirm_phrase: body.confirm_phrase ?? "ROLLBACK",
+      allow_write_with_scan_creds: body.allow_write_with_scan_creds ?? false,
+      rescan: body.rescan ?? true,
+    }),
+  });
+}
+
+export function listRemediationJobs() {
+  return request<{ jobs: RemediateJob[] }>("/api/remediate/jobs");
+}
+
+export function getRemediationJob(jobId: string) {
+  return request<RemediateJob>(`/api/remediate/jobs/${jobId}`);
+}

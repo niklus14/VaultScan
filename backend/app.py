@@ -17,24 +17,26 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from aws_client import probe_connection
+from aws_client import get_scan_session, probe_connection
 from config import settings
 import connection_store
 from grok_client import (
     GrokError,
     assistant_reply,
     enrich_attack_paths,
+    enrich_fix_actions,
     generate_report_narrative,
     summarize_scan,
 )
 from report_export import build_report_context, export_docx, export_pdf
+import remediation_engine
 import scan_persistence
 from scanner_engine import run_scan
 
 app = FastAPI(
     title="VaultScan CSPM API",
-    version="1.2.0",
-    description="Cloud connection settings, real AWS scanning, Cloud Assistant reports",
+    version="1.3.0",
+    description="Cloud connection settings, real AWS scanning, Cloud Assistant, AI remediation",
 )
 
 app.add_middleware(
@@ -369,6 +371,41 @@ def api_scan(body: ScanRequest | None = None):
             external_id=external_id,
             region=region,
         )
+        # Demo remediations: hide findings marked fixed until "make as before"
+        if mode == "simulate":
+            fixed = remediation_engine.get_simulate_fixed()
+            if fixed:
+                findings = [
+                    f
+                    for f in (result.get("findings") or [])
+                    if str(f.get("id") or "") not in fixed
+                ]
+                result["findings"] = findings
+                result["total_findings"] = len(findings)
+                summary = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
+                for f in findings:
+                    sev = f.get("severity")
+                    if sev in summary:
+                        summary[sev] += 1
+                result["summary"] = summary
+                from scanner_engine import compute_score
+
+                result["score"] = compute_score(findings)
+                # rebuild light vulnerabilities list
+                result["vulnerabilities"] = [
+                    {
+                        "id": f.get("resource") or f.get("id"),
+                        "service": f.get("service"),
+                        "severity": f.get("severity"),
+                        "description": f.get("description"),
+                        "title": f.get("title"),
+                        "remediation": f.get("remediation"),
+                        "compliance": f.get("compliance"),
+                        "rule_id": f.get("rule_id"),
+                        "region": f.get("region"),
+                    }
+                    for f in findings
+                ]
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
@@ -666,7 +703,267 @@ def public_config():
         "ready_to_scan": view.get("ready_to_scan"),
         "grok_enabled": bool(settings.grok_api_key),
         "grok_model": settings.grok_model if settings.grok_api_key else None,
+        "remediation_enabled": True,
     }
+
+
+# ─── AI remediation (plan → dry-run → apply → make as before) ────────────────
+
+
+class RemediatePlanRequest(BaseModel):
+    scan_id: str | None = None
+    finding_ids: list[str] | None = None
+    mode: Literal["all_safe", "selected", "all"] = "all_safe"
+    use_ai: bool = True
+
+
+class RemediateJobRequest(BaseModel):
+    job_id: str
+    # Apply gates
+    confirm: bool = False
+    confirm_phrase: str | None = None
+    only_safe: bool = False
+    allow_write_with_scan_creds: bool = False
+    rescan: bool = True
+
+
+class RemediateRollbackRequest(BaseModel):
+    job_id: str
+    action_ids: list[str] | None = None
+    confirm: bool = False
+    confirm_phrase: str | None = None
+    allow_write_with_scan_creds: bool = False
+    rescan: bool = True
+
+
+def _remediate_session(allow_write_with_scan_creds: bool = False):
+    """Return (session|None, simulate: bool, error: str|None)."""
+    rt = connection_store.resolve_runtime()
+    mode = rt.get("auth_mode") or "simulate"
+    if mode == "simulate":
+        return None, True, None
+    if not allow_write_with_scan_creds:
+        return (
+            None,
+            False,
+            (
+                "Write remediations require allow_write_with_scan_creds=true "
+                "(scanner stays read-only by default). Demo mode can apply safely without AWS write."
+            ),
+        )
+    try:
+        session, _info = get_scan_session(
+            mode=mode,
+            role_arn=rt.get("role_arn"),
+            external_id=rt.get("external_id") or None,
+            region=rt.get("region"),
+        )
+        return session, False, None
+    except Exception as exc:  # noqa: BLE001
+        return None, False, str(exc)
+
+
+def _maybe_rescan(do_rescan: bool) -> dict[str, Any] | None:
+    if not do_rescan:
+        return None
+    rt = connection_store.resolve_runtime()
+    body = ScanRequest(
+        mode=rt.get("auth_mode"),
+        role_arn=rt.get("role_arn"),
+        external_id=rt.get("external_id") or None,
+        region=rt.get("region"),
+    )
+    return api_scan(body)
+
+
+@app.post("/api/remediate/plan")
+async def remediate_plan(body: RemediatePlanRequest):
+    """Build a fix plan for scan findings (registry + optional AI notes)."""
+    scan = _find_scan(body.scan_id)
+    if not scan and body.mode != "all_safe":
+        # still allow empty plan messaging
+        pass
+    if not scan:
+        raise HTTPException(
+            status_code=404,
+            detail="No scan available. Run a scan first, then plan fixes.",
+        )
+    job = remediation_engine.plan_from_scan(
+        scan,
+        finding_ids=body.finding_ids,
+        mode=body.mode,
+    )
+    ai_used = False
+    if body.use_ai and settings.grok_api_key:
+        try:
+            enriched = await enrich_fix_actions(job.get("actions") or [], scan)
+            job["actions"] = enriched
+            job["ai_used"] = True
+            ai_used = True
+            job = remediation_engine._upsert_job(job)
+        except Exception:
+            pass
+    return {
+        "ok": True,
+        "job": job,
+        "ai_used": ai_used or bool(job.get("ai_used")),
+        "counts": {
+            "total": len(job.get("actions") or []),
+            "auto": sum(
+                1 for a in (job.get("actions") or []) if a.get("auto_applicable")
+            ),
+            "safe": sum(
+                1 for a in (job.get("actions") or []) if a.get("risk") == "safe"
+            ),
+        },
+    }
+
+
+@app.post("/api/remediate/dry-run")
+def remediate_dry_run(body: RemediateJobRequest):
+    session, simulate, err = _remediate_session(
+        allow_write_with_scan_creds=body.allow_write_with_scan_creds or False
+    )
+    # dry-run can preview without write even if no write flag (simulate path or preview only)
+    rt = connection_store.resolve_runtime()
+    if rt.get("auth_mode") == "simulate":
+        simulate = True
+        session = None
+    elif err and not simulate:
+        # still allow structural dry-run without AWS
+        session = None
+        simulate = True
+    try:
+        job = remediation_engine.dry_run_job(
+            body.job_id, session, simulate=simulate
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Remediation job not found") from None
+    return {"ok": True, "job": job}
+
+
+@app.post("/api/remediate/apply")
+def remediate_apply(body: RemediateJobRequest):
+    """Apply planned fixes. Requires confirm=true. Dangerous needs phrase APPLY."""
+    if not body.confirm:
+        raise HTTPException(
+            status_code=400,
+            detail="Set confirm=true to apply remediations.",
+        )
+    confirm_dangerous = (body.confirm_phrase or "").strip().upper() == "APPLY"
+    session, simulate, err = _remediate_session(
+        allow_write_with_scan_creds=body.allow_write_with_scan_creds
+    )
+    rt = connection_store.resolve_runtime()
+    if rt.get("auth_mode") == "simulate":
+        simulate = True
+        session = None
+        err = None
+    if err:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": err,
+                "hint": (
+                    "Enable Demo mode to try apply safely, or set "
+                    "allow_write_with_scan_creds=true with a role that may write."
+                ),
+            },
+        )
+    try:
+        job = remediation_engine.apply_job(
+            body.job_id,
+            session,
+            simulate=simulate,
+            only_safe=body.only_safe,
+            confirm_dangerous=confirm_dangerous,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Remediation job not found") from None
+
+    rescan = None
+    score_after = None
+    try:
+        rescan = _maybe_rescan(body.rescan)
+        if rescan:
+            score_after = rescan.get("score")
+            job["score_after"] = score_after
+            job = remediation_engine._upsert_job(job)
+    except Exception as exc:  # noqa: BLE001
+        # apply succeeded; rescan optional
+        rescan = {"error": str(exc)}
+
+    return {
+        "ok": True,
+        "job": job,
+        "rescan": rescan,
+        "message": (
+            "Fixes applied. Use “Make as before” to roll back this job if needed."
+        ),
+    }
+
+
+@app.post("/api/remediate/rollback")
+def remediate_rollback(body: RemediateRollbackRequest):
+    """Restore resources as they were before this job (make as before)."""
+    if not body.confirm:
+        raise HTTPException(
+            status_code=400,
+            detail="Set confirm=true to roll back (make as before).",
+        )
+    if (body.confirm_phrase or "").strip().upper() not in ("APPLY", "ROLLBACK", "RESTORE"):
+        raise HTTPException(
+            status_code=400,
+            detail='confirm_phrase must be "ROLLBACK" (or APPLY/RESTORE) to restore previous state.',
+        )
+    session, simulate, err = _remediate_session(
+        allow_write_with_scan_creds=body.allow_write_with_scan_creds
+    )
+    rt = connection_store.resolve_runtime()
+    if rt.get("auth_mode") == "simulate":
+        simulate = True
+        session = None
+        err = None
+    if err:
+        raise HTTPException(status_code=403, detail={"error": err})
+    try:
+        job = remediation_engine.rollback_job(
+            body.job_id,
+            session,
+            simulate=simulate,
+            action_ids=body.action_ids,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Remediation job not found") from None
+
+    rescan = None
+    try:
+        rescan = _maybe_rescan(body.rescan)
+        if rescan and isinstance(rescan, dict) and "score" in rescan:
+            job["score_after"] = rescan.get("score")
+            job = remediation_engine._upsert_job(job)
+    except Exception as exc:  # noqa: BLE001
+        rescan = {"error": str(exc)}
+
+    return {
+        "ok": True,
+        "job": job,
+        "rescan": rescan,
+        "message": "Restored previous configuration where snapshots allowed (make as before).",
+    }
+
+
+@app.get("/api/remediate/jobs")
+def remediate_jobs():
+    return {"jobs": remediation_engine.list_jobs()}
+
+
+@app.get("/api/remediate/jobs/{job_id}")
+def remediate_job(job_id: str):
+    job = remediation_engine.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
 
 
 if __name__ == "__main__":

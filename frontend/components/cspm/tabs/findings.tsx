@@ -8,9 +8,16 @@ import {
   Check,
   Search,
   ShieldAlert,
+  Sparkles,
+  Loader2,
 } from "lucide-react";
-import { useLiveData } from "@/lib/scan-store";
+import { useLiveData, useScanStore } from "@/lib/scan-store";
 import type { Severity } from "@/components/cspm/data";
+import {
+  planRemediation,
+  applyRemediation,
+  type RemediateJob,
+} from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 const severityStyles: Record<Severity, string> = {
@@ -29,13 +36,50 @@ const SEV_FILTERS: Array<"ALL" | Severity> = [
 ];
 
 export function FindingsTab() {
-  const { vulnerabilities, isLive, compliance } = useLiveData();
+  const { vulnerabilities, isLive, compliance, scanId, mode } = useLiveData();
+  const launchScan = useScanStore((s) => s.launchScan);
   const [sev, setSev] = useState<"ALL" | Severity>("ALL");
   const [service, setService] = useState<string>("ALL");
   const [framework, setFramework] = useState<string>("ALL");
   const [q, setQ] = useState("");
   const [openId, setOpenId] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
+  const [fixBusy, setFixBusy] = useState<string | null>(null);
+  const [fixMsg, setFixMsg] = useState<string | null>(null);
+
+  const fixOne = async (findingId: string) => {
+    setFixBusy(findingId);
+    setFixMsg(null);
+    try {
+      const planned = await planRemediation({
+        scan_id: scanId && scanId !== "SCAN-DEMO" ? scanId : undefined,
+        finding_ids: [findingId],
+        mode: "selected",
+        use_ai: true,
+      });
+      const job: RemediateJob = planned.job;
+      const res = await applyRemediation({
+        job_id: job.job_id,
+        confirm: true,
+        only_safe: false,
+        confirm_phrase: "APPLY",
+        allow_write_with_scan_creds: mode === "simulate",
+        rescan: true,
+      });
+      if (res.rescan && "scan_id" in res.rescan) {
+        useScanStore.setState({ scan: res.rescan as never });
+      } else {
+        await launchScan().catch(() => undefined);
+      }
+      setFixMsg(
+        "Fix attempted. Open AI FIX tab to review the job or Make as before.",
+      );
+    } catch (e) {
+      setFixMsg(e instanceof Error ? e.message : "Fix failed");
+    } finally {
+      setFixBusy(null);
+    }
+  };
 
   const services = useMemo(() => {
     const s = new Set(vulnerabilities.map((v) => v.service));
@@ -140,6 +184,12 @@ export function FindingsTab() {
           {!isLive && " · MOCK"}
         </span>
       </div>
+
+      {fixMsg && (
+        <p className="rounded-md border border-border bg-panel px-3 py-2 font-mono text-[11px] text-muted-foreground">
+          {fixMsg}
+        </p>
+      )}
 
       {/* Compliance quick strip */}
       {compliance.length > 0 && (
@@ -253,20 +303,35 @@ export function FindingsTab() {
                             <p className="font-mono text-[10px] font-bold tracking-wider text-muted-foreground">
                               HOW TO FIX
                             </p>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                void copyFix(v.remediation || "", key)
-                              }
-                              className="flex items-center gap-1 rounded border border-border px-2 py-1 font-mono text-[10px] text-muted-foreground hover:text-foreground"
-                            >
-                              {copied === key ? (
-                                <Check className="size-3 text-success" />
-                              ) : (
-                                <Copy className="size-3" />
-                              )}
-                              {copied === key ? "COPIED" : "COPY"}
-                            </button>
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                disabled={!isLive || fixBusy === v.id}
+                                onClick={() => void fixOne(v.id)}
+                                className="flex items-center gap-1 rounded border border-accent-blue/40 bg-accent-blue/10 px-2 py-1 font-mono text-[10px] font-bold text-accent-blue hover:bg-accent-blue/20 disabled:opacity-40"
+                              >
+                                {fixBusy === v.id ? (
+                                  <Loader2 className="size-3 animate-spin" />
+                                ) : (
+                                  <Sparkles className="size-3" />
+                                )}
+                                FIX WITH AI
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  void copyFix(v.remediation || "", key)
+                                }
+                                className="flex items-center gap-1 rounded border border-border px-2 py-1 font-mono text-[10px] text-muted-foreground hover:text-foreground"
+                              >
+                                {copied === key ? (
+                                  <Check className="size-3 text-success" />
+                                ) : (
+                                  <Copy className="size-3" />
+                                )}
+                                {copied === key ? "COPIED" : "COPY"}
+                              </button>
+                            </div>
                           </div>
                           <pre className="mt-1.5 overflow-x-auto rounded-md border border-border bg-background p-3 font-mono text-[11px] leading-relaxed text-success/90">
                             {v.remediation}
