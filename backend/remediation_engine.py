@@ -1785,12 +1785,23 @@ def rollback_one(
                         raise
         elif rid == "IAM-TRUST-WILDCARD":
             prev = snap.get("assume_role_policy")
+            role_name = _iam_role_name(snap.get("role_name") or resource)
             if prev:
                 if not isinstance(prev, str):
                     prev = json.dumps(prev)
-                session.client("iam").update_assume_role_policy(
-                    RoleName=resource, PolicyDocument=prev
-                )
+                try:
+                    session.client("iam").update_assume_role_policy(
+                        RoleName=role_name, PolicyDocument=prev
+                    )
+                except ClientError as e:
+                    raise RuntimeError(
+                        _format_access_denied(
+                            "iam:UpdateAssumeRolePolicy",
+                            rid,
+                            role_name,
+                            str(e),
+                        )
+                    ) from e
         elif rid == "KMS-PUBLIC-POLICY":
             prev = snap.get("key_policy")
             key_id = snap.get("key_id") or resource
@@ -1862,7 +1873,16 @@ def rollback_one(
             unmark_fixed(f"{rid}:{resource}")
     except (ClientError, BotoCoreError, RuntimeError) as exc:
         a["status"] = "rollback_failed"
-        a["error"] = str(exc)
+        err = str(exc)
+        if "AccessDenied" in err or "not authorized" in err.lower():
+            a["error"] = _format_access_denied(
+                "rollback",
+                rid,
+                resource,
+                err,
+            )
+        else:
+            a["error"] = err
     return a
 
 
