@@ -47,9 +47,9 @@ export function RemediationHubTab() {
 
   const [job, setJob] = useState<RemediateJob | null>(null);
   const [jobs, setJobs] = useState<RemediateJob[]>([]);
-  const [onlySafe, setOnlySafe] = useState(false);
+  const [onlySafe, setOnlySafe] = useState(false); // elevated fixes ON by default
   const [useAi, setUseAi] = useState(true);
-  const [phrase, setPhrase] = useState("");
+  const [phrase, setPhrase] = useState("APPLY"); // prefill so dangerous can run
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -73,15 +73,23 @@ export function RemediationHubTab() {
     setError(null);
     setMessage(null);
     try {
+      // Always build full plan; only_safe is enforced only on Apply
       const res = await planRemediation({
         scan_id: scanId && scanId !== "SCAN-DEMO" ? scanId : undefined,
-        mode: modePlan === "all_safe" ? "all_safe" : "all",
+        mode: "all",
         use_ai: useAi,
       });
       setJob(res.job);
+      if (modePlan === "all_safe") {
+        setOnlySafe(true);
+      } else {
+        setOnlySafe(false);
+      }
+      setPhrase("APPLY");
       setMessage(
-        `Plan ready: ${res.counts.total} actions · ${res.counts.safe} safe · ${res.counts.auto} auto` +
-          (res.ai_used ? " · AI notes added" : ""),
+        `Plan ready: ${res.counts.total} actions · ${res.counts.auto} auto-applicable · ${res.counts.safe} safe` +
+          (res.ai_used ? " · AI notes added" : "") +
+          ". Click APPLY FIXES next (APPLY is pre-filled for dangerous items).",
       );
       await refreshJobs();
     } catch (e) {
@@ -108,14 +116,16 @@ export function RemediationHubTab() {
 
   const apply = async () => {
     if (!job) return;
+    const actionable = (job.actions || []).filter(
+      (a) => a.auto_applicable || (a.aws_calls && a.aws_calls.length),
+    );
     const needsDanger =
       !onlySafe &&
-      (job.actions || []).some(
-        (a) => a.risk === "dangerous" && a.auto_applicable,
-      );
-    if (needsDanger && phrase.trim().toUpperCase() !== "APPLY") {
+      actionable.some((a) => a.risk === "dangerous");
+    const phraseOk = phrase.trim().toUpperCase() === "APPLY";
+    if (needsDanger && !phraseOk) {
       setError(
-        'Dangerous fixes included — type APPLY in the box below, then click APPLY FIXES again.',
+        "Some fixes are marked dangerous (e.g. detach admin). Type APPLY below, then click APPLY FIXES.",
       );
       return;
     }
@@ -125,7 +135,8 @@ export function RemediationHubTab() {
       const res = await applyRemediation({
         job_id: job.job_id,
         confirm: true,
-        confirm_phrase: needsDanger ? "APPLY" : phrase.trim() || undefined,
+        // Always send APPLY when prefilled so dangerous items are not all skipped
+        confirm_phrase: phraseOk || needsDanger ? "APPLY" : undefined,
         only_safe: onlySafe,
         allow_write_with_scan_creds: true,
         rescan: true,
@@ -137,22 +148,34 @@ export function RemediationHubTab() {
       const failedActs = (res.job.actions || []).filter(
         (a) => a.status === "failed",
       );
-      const failedN = failedActs.length;
-      const skippedN = (res.job.actions || []).filter(
+      const skippedActs = (res.job.actions || []).filter(
         (a) => a.status === "skipped",
-      ).length;
+      );
+      const failedN = failedActs.length;
+      const skippedN = skippedActs.length;
+      const skipReasons = skippedActs
+        .map((a) => a.error || a.preview)
+        .filter(Boolean)
+        .slice(0, 2);
       const firstFail = failedActs[0]?.error || "";
       if (appliedN === 0 || res.ok === false) {
         setError(
-          res.message ||
-            `No AWS changes (${skippedN} skipped, ${failedN} failed). ${firstFail} ` +
-              "Your Access Key user needs write permissions — the scan Role is usually read-only.",
+          [
+            res.message,
+            firstFail,
+            skipReasons.join(" · "),
+            onlySafe
+              ? "“Only safe fixes” is checked — uncheck it to apply elevated lab findings."
+              : null,
+          ]
+            .filter(Boolean)
+            .join(" "),
         );
         setMessage(null);
       } else {
         setMessage(
           res.message ||
-            `Applied ${appliedN} real AWS change(s)${failedN ? `, ${failedN} failed` : ""}. ` +
+            `Applied ${appliedN} real AWS change(s)${failedN ? `, ${failedN} failed` : ""}${skippedN ? `, ${skippedN} skipped` : ""}. ` +
               "Re-scan uses live AWS — fixed issues should disappear.",
         );
       }
@@ -264,6 +287,9 @@ export function RemediationHubTab() {
               onChange={(e) => setOnlySafe(e.target.checked)}
             />
             Only safe fixes on apply
+            <span className="text-[10px] text-warning">
+              (leave OFF for real lab fixes — most findings are elevated)
+            </span>
           </label>
           <label className="flex items-center gap-2 font-mono text-[11px] text-muted-foreground">
             <input

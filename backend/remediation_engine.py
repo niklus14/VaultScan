@@ -508,10 +508,13 @@ def plan_from_scan(
             if str(f.get("resource") or "") not in id_set:
                 continue
         action = build_action_from_finding(f)
+        # Do NOT clear auto_applicable here — that permanently blocks Apply later.
+        # Filter risk only at apply-time via only_safe.
         if mode == "all_safe" and action.risk != "safe":
-            action.auto_applicable = False
-            action.status = "skipped"
-            action.preview = "Excluded from all_safe (not risk=safe). Select explicitly to plan apply."
+            action.preview = (
+                "Included in plan but risk is not safe — uncheck "
+                "“Only safe fixes” (or use PLAN ALL) to apply."
+            )
         actions.append(action)
 
     # severity order
@@ -1098,31 +1101,58 @@ def apply_job(
         raise KeyError(job_id)
     results = []
     for act in job.get("actions") or []:
+        act = deepcopy(act)
         risk = act.get("risk") or "elevated"
-        # Re-enable actions that were only skipped at plan-time for all_safe display
-        if act.get("status") == "skipped" and act.get("auto_applicable"):
-            act = deepcopy(act)
-            act["status"] = "planned"
-            act["preview"] = None
-            act["error"] = None
-        if only_safe and risk != "safe":
-            act = deepcopy(act)
-            act["status"] = "skipped"
-            act["preview"] = "Skipped (only safe fixes selected)"
-            results.append(act)
-            continue
-        if risk == "dangerous" and not confirm_dangerous:
-            act = deepcopy(act)
-            act["status"] = "skipped"
-            act["error"] = "Dangerous fix requires typing APPLY to confirm"
-            results.append(act)
-            continue
+        # Rebuild auto flag from rule_id (plans may have stale flags)
+        rid = str(act.get("rule_id") or "")
         if not act.get("auto_applicable"):
-            act = deepcopy(act)
+            act["auto_applicable"] = _auto_applicable(rid)
+        # Reset plan-time skipped so apply can run
+        if act.get("status") in ("skipped", "planned", "dry_run_ok", "dry_run_fail"):
+            if act.get("status") != "applied":
+                act["error"] = None
+                if act.get("status") != "dry_run_ok":
+                    act["status"] = "planned"
+
+        if only_safe and risk != "safe":
             act["status"] = "skipped"
-            act["error"] = "Not auto-applicable — use CLI hint or Make as before after manual fix"
+            act["preview"] = (
+                "Skipped: “Only safe fixes” is on. Uncheck it to apply elevated fixes "
+                f"(this one is risk={risk})."
+            )
+            act["error"] = act["preview"]
             results.append(act)
             continue
+        # Elevated applies without phrase; only dangerous needs APPLY
+        if risk == "dangerous" and not confirm_dangerous:
+            act["status"] = "skipped"
+            act["error"] = (
+                "Skipped: dangerous change — type APPLY in the confirm box, then Apply again."
+            )
+            results.append(act)
+            continue
+        if not act.get("auto_applicable") and not (act.get("aws_calls") or []):
+            act["status"] = "skipped"
+            act["error"] = "Not auto-applicable — copy the CLI hint and fix manually"
+            results.append(act)
+            continue
+        # Ensure aws_calls exist by rebuilding from rule if missing
+        if not act.get("aws_calls") and act.get("auto_applicable"):
+            rebuilt = build_action_from_finding(
+                {
+                    "id": act.get("finding_id"),
+                    "rule_id": act.get("rule_id"),
+                    "resource": act.get("resource"),
+                    "title": act.get("title"),
+                    "remediation": act.get("cli_hint"),
+                    "severity": act.get("severity"),
+                    "service": act.get("service"),
+                    "region": act.get("region"),
+                }
+            )
+            act["aws_calls"] = rebuilt.aws_calls
+            act["auto_applicable"] = rebuilt.auto_applicable
+
         results.append(apply_one(session, act, simulate=simulate, dry_run=False))
 
     job["actions"] = results
