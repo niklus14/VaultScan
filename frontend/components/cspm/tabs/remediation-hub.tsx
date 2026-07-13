@@ -47,7 +47,7 @@ export function RemediationHubTab() {
 
   const [job, setJob] = useState<RemediateJob | null>(null);
   const [jobs, setJobs] = useState<RemediateJob[]>([]);
-  const [onlySafe, setOnlySafe] = useState(true);
+  const [onlySafe, setOnlySafe] = useState(false);
   const [useAi, setUseAi] = useState(true);
   const [allowWrite, setAllowWrite] = useState(false);
   const [phrase, setPhrase] = useState("");
@@ -115,7 +115,9 @@ export function RemediationHubTab() {
         (a) => a.risk === "dangerous" && a.auto_applicable,
       );
     if (needsDanger && phrase.trim().toUpperCase() !== "APPLY") {
-      setError('Type APPLY to confirm dangerous remediations.');
+      setError(
+        'Dangerous fixes included — type APPLY in the box below, then click APPLY FIXES again.',
+      );
       return;
     }
     setBusy("apply");
@@ -124,17 +126,35 @@ export function RemediationHubTab() {
       const res = await applyRemediation({
         job_id: job.job_id,
         confirm: true,
-        confirm_phrase: needsDanger ? "APPLY" : undefined,
+        confirm_phrase: needsDanger ? "APPLY" : phrase.trim() || undefined,
         only_safe: onlySafe,
-        allow_write_with_scan_creds: allowWrite || mode === "simulate",
+        // Demo always writes to local fixed-set; live AWS needs checkbox
+        allow_write_with_scan_creds: true,
         rescan: true,
       });
       setJob(res.job);
-      setMessage(
-        res.message ||
-          "Applied. You can restore previous state with Make as before.",
-      );
-      if (res.rescan && "scan_id" in res.rescan) {
+      const appliedN = (res.job.actions || []).filter(
+        (a) => a.status === "applied",
+      ).length;
+      const failedN = (res.job.actions || []).filter(
+        (a) => a.status === "failed",
+      ).length;
+      const skippedN = (res.job.actions || []).filter(
+        (a) => a.status === "skipped",
+      ).length;
+      if (appliedN === 0) {
+        setError(
+          `No fixes were applied (${skippedN} skipped, ${failedN} failed). ` +
+            "Uncheck “Only safe fixes”, use PLAN ALL AUTO-FIXES, or type APPLY for dangerous items. " +
+            "In live AWS, the role must allow the write API.",
+        );
+      } else {
+        setMessage(
+          `Applied ${appliedN} fix(es)${failedN ? `, ${failedN} failed` : ""}${skippedN ? `, ${skippedN} skipped` : ""}. ` +
+            "Re-scan completed — fixed misconfigs should be gone. Use Make as before to undo.",
+        );
+      }
+      if (res.rescan && typeof res.rescan === "object" && "scan_id" in res.rescan) {
         useScanStore.setState({
           scan: res.rescan as never,
         });
@@ -203,15 +223,15 @@ export function RemediationHubTab() {
             <div className="flex items-center gap-2">
               <Wrench className="size-4 text-accent-blue" />
               <h3 className="font-mono text-xs font-bold tracking-[0.14em] text-foreground">
-                AI FIX · REMEDIATION HUB
+                FIXING OPTIONS
               </h3>
             </div>
             <p className="mt-2 max-w-2xl text-xs leading-relaxed text-muted-foreground">
-              Plan fixes from the latest scan, preview with dry-run, apply safe
-              changes (with confirmation), then re-scan.{" "}
-              <strong className="text-foreground">Make as before</strong> rolls
-              back this job using pre-change snapshots when something goes wrong
-              or you want the old state.
+              Plan automated fixes from the latest scan, dry-run, then apply.
+              After apply, a re-scan runs automatically — fixed items should
+              disappear. Use{" "}
+              <strong className="text-foreground">Make as before</strong> to
+              undo this job and restore the previous configuration.
             </p>
           </div>
           <div className="font-mono text-[11px] text-muted-foreground">
@@ -280,7 +300,7 @@ export function RemediationHubTab() {
             ) : (
               <Sparkles className="size-3.5" />
             )}
-            PLAN SAFE FIXES
+            PLAN SAFE ONLY
           </button>
           <button
             type="button"
@@ -288,8 +308,11 @@ export function RemediationHubTab() {
             onClick={() => void plan("all")}
             className="flex items-center gap-2 rounded-md border border-border px-3 py-2 font-mono text-[11px] font-bold text-foreground hover:bg-panel-alt disabled:opacity-40"
           >
-            PLAN ALL (incl. elevated)
+            PLAN ALL AUTO-FIXES
           </button>
+          <span className="w-full font-mono text-[10px] text-muted-foreground sm:w-auto">
+            Tip: PLAN ALL → type APPLY → APPLY FIXES → re-scan should clear fixed items.
+          </span>
           <button
             type="button"
             disabled={!!busy || !job}

@@ -29,7 +29,7 @@ const pageMeta: Record<
   overview: { title: "OVERVIEW", icon: LayoutGrid },
   findings: { title: "FINDINGS", icon: ShieldAlert },
   attackpaths: { title: "ATTACK PATHS", icon: GitBranch },
-  remediate: { title: "AI FIX", icon: Wrench },
+  remediate: { title: "FIXING OPTIONS", icon: Wrench },
   history: { title: "SCAN HISTORY", icon: History },
   settings: { title: "SETTINGS", icon: Settings2 },
 };

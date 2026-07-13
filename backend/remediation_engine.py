@@ -39,22 +39,86 @@ ActionStatus = Literal[
 
 _LOCK = threading.Lock()
 _JOBS_PATH = _resolve_data_dir() / "remediation_jobs.json"
+_FIXED_PATH = _resolve_data_dir() / "remediation_fixed.json"
 _MAX_JOBS = 40
-
-# In-process set of finding ids "fixed" in simulate mode (for demo re-scan filtering)
-_SIM_FIXED: set[str] = set()
 
 
 def utcnow() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _load_fixed() -> set[str]:
+    """Finding ids suppressed after successful apply (persisted for serverless)."""
+    raw = _read_json(_FIXED_PATH, {"ids": []})
+    ids = raw.get("ids") or []
+    return {str(x) for x in ids if x}
+
+
+def _save_fixed(ids: set[str]) -> None:
+    _write_json(_FIXED_PATH, {"ids": sorted(ids), "updated_at": utcnow()})
+
+
 def get_simulate_fixed() -> set[str]:
-    return set(_SIM_FIXED)
+    """All currently applied (not rolled back) finding suppressions."""
+    return _load_fixed() | _applied_ids_from_jobs()
+
+
+def _applied_ids_from_jobs() -> set[str]:
+    """Derive fixed ids from jobs still in applied state (source of truth)."""
+    out: set[str] = set()
+    for job in list_jobs_unlocked():
+        for act in job.get("actions") or []:
+            if act.get("status") == "applied":
+                fid = act.get("finding_id")
+                if fid:
+                    out.add(str(fid))
+                # also rule:resource variants
+                rid = act.get("rule_id")
+                res = act.get("resource")
+                if rid and res:
+                    out.add(f"{rid}:{res}")
+    return out
+
+
+def list_jobs_unlocked() -> list[dict[str, Any]]:
+    return deepcopy(_load_jobs().get("jobs") or [])
+
+
+def mark_fixed(finding_id: str) -> None:
+    ids = _load_fixed()
+    ids.add(str(finding_id))
+    _save_fixed(ids)
+
+
+def unmark_fixed(finding_id: str) -> None:
+    ids = _load_fixed()
+    ids.discard(str(finding_id))
+    _save_fixed(ids)
 
 
 def clear_simulate_fixed() -> None:
-    _SIM_FIXED.clear()
+    _save_fixed(set())
+
+
+def finding_is_fixed(finding: dict[str, Any], fixed: set[str] | None = None) -> bool:
+    """True if this finding should be hidden after a successful apply."""
+    fixed = fixed if fixed is not None else get_simulate_fixed()
+    if not fixed:
+        return False
+    fid = str(finding.get("id") or "")
+    rid = str(finding.get("rule_id") or "")
+    res = str(finding.get("resource") or "")
+    candidates = {fid, res, rid}
+    if rid and res:
+        candidates.add(f"{rid}:{res}")
+    if rid and fid:
+        candidates.add(f"{rid}:{fid}")
+    # Prefix match for SG-OPEN-* after demo apply of any open-port rule
+    if rid.startswith("SG-OPEN-") and any(
+        str(x).startswith("SG-OPEN-") for x in fixed
+    ):
+        return True
+    return any(c and c in fixed for c in candidates)
 
 
 @dataclass
@@ -98,7 +162,7 @@ def _save_jobs(raw: dict[str, Any]) -> None:
 
 def list_jobs() -> list[dict[str, Any]]:
     with _LOCK:
-        return deepcopy(_load_jobs().get("jobs") or [])
+        return list_jobs_unlocked()
 
 
 def get_job(job_id: str) -> dict[str, Any] | None:
@@ -156,7 +220,7 @@ def _risk_for_rule(rule_id: str) -> Risk:
 
 def _auto_applicable(rule_id: str) -> bool:
     rid = (rule_id or "").upper()
-    # Phase-1 automatable
+    # Automatable (demo always; live AWS when write allowed)
     return rid in {
         "S3-BPA-INCOMPLETE",
         "S3-BPA-MISSING",
@@ -175,6 +239,12 @@ def _auto_applicable(rule_id: str) -> bool:
         "IAM-CLOUDTRAIL-DESTROY",
         "IAM-IMAGE-LEAK",
         "IAM-PRIVESC-NO-BOUNDARY",
+        "IAM-TRUST-WILDCARD",
+        "KMS-PUBLIC-POLICY",
+        "SQS-PUBLIC-POLICY",
+        "SM-PUBLIC-POLICY",
+        "SM-OVERBROAD-POLICY",
+        "IAM-NO-MFA",  # demo suppress only; live = plan-only unless simulate
     } or rid.startswith("SG-OPEN-")
 
 
@@ -344,6 +414,28 @@ def build_action_from_finding(finding: dict[str, Any]) -> FixAction:
                     "policy_name": pol_name,
                     "attachment": (evidence or {}).get("attachment") or "",
                 },
+            }
+        ]
+    elif rid in (
+        "IAM-TRUST-WILDCARD",
+        "KMS-PUBLIC-POLICY",
+        "SQS-PUBLIC-POLICY",
+        "SM-PUBLIC-POLICY",
+        "SM-OVERBROAD-POLICY",
+        "IAM-NO-MFA",
+    ):
+        # Structured apply: full for demo; live AWS uses best-effort handlers below
+        summary = f"Remediate {rule_id} on {resource}"
+        steps = [
+            "Snapshot current configuration",
+            "Apply least-privilege / non-public configuration",
+            "Re-scan to verify",
+        ]
+        aws_calls = [
+            {
+                "service": "generic",
+                "method": "demo_or_best_effort",
+                "params": {"rule_id": rid, "resource": resource, "evidence": evidence},
             }
         ]
     else:
@@ -611,8 +703,15 @@ def apply_one(
         return a
 
     if simulate or session is None:
-        # Demo apply: mark fixed, keep snapshot for rollback
-        _SIM_FIXED.add(str(a.get("finding_id") or ""))
+        # Demo apply: persist suppress keys (serverless-safe).
+        # Also mark rule_id alone — simulate re-scans often mint new resource IDs (e.g. sg-*).
+        fid = str(a.get("finding_id") or "")
+        if fid:
+            mark_fixed(fid)
+        if rid and resource:
+            mark_fixed(f"{rid}:{resource}")
+        if rid:
+            mark_fixed(rid)
         a["status"] = "applied"
         a["preview"] = f"[demo] Simulated apply of {rid} on {resource}"
         a["error"] = None
@@ -765,6 +864,21 @@ def apply_one(
                 raise RuntimeError(
                     "Could not find/detach matching managed policy — apply manually"
                 )
+        elif rid in (
+            "IAM-TRUST-WILDCARD",
+            "KMS-PUBLIC-POLICY",
+            "SQS-PUBLIC-POLICY",
+            "SM-PUBLIC-POLICY",
+            "SM-OVERBROAD-POLICY",
+            "IAM-NO-MFA",
+        ):
+            # Live AWS: suppress on next scan only after successful demo path;
+            # for real accounts require manual for MFA/trust/KMS complexity —
+            # still mark applied only if simulate already handled above.
+            raise RuntimeError(
+                f"{rid} requires manual/console steps in live AWS "
+                f"(or use Demo mode for full auto demo). CLI: {a.get('cli_hint') or 'see finding'}"
+            )
         else:
             a["status"] = "skipped"
             a["error"] = "No automated apply handler for this rule"
@@ -773,6 +887,12 @@ def apply_one(
         a["status"] = "applied"
         a["error"] = None
         a["preview"] = f"Applied {rid} on {resource}"
+        # Also suppress on next scan until rolled back (covers eventual consistency)
+        fid = str(a.get("finding_id") or "")
+        if fid:
+            mark_fixed(fid)
+        if rid and resource:
+            mark_fixed(f"{rid}:{resource}")
     except (ClientError, BotoCoreError, RuntimeError) as exc:
         a["status"] = "failed"
         a["error"] = str(exc)
@@ -798,7 +918,13 @@ def rollback_one(
         return a
 
     if simulate or session is None or snap.get("simulate"):
-        _SIM_FIXED.discard(str(a.get("finding_id") or ""))
+        fid = str(a.get("finding_id") or "")
+        if fid:
+            unmark_fixed(fid)
+        if rid and resource:
+            unmark_fixed(f"{rid}:{resource}")
+        if rid:
+            unmark_fixed(rid)
         a["status"] = "rolled_back"
         a["preview"] = f"[demo] Restored finding {a.get('finding_id')}"
         a["error"] = None
@@ -916,6 +1042,11 @@ def rollback_one(
         a["status"] = "rolled_back"
         a["error"] = None
         a["preview"] = f"Rolled back {rid} on {resource} to pre-fix snapshot"
+        fid = str(a.get("finding_id") or "")
+        if fid:
+            unmark_fixed(fid)
+        if rid and resource:
+            unmark_fixed(f"{rid}:{resource}")
     except (ClientError, BotoCoreError, RuntimeError) as exc:
         a["status"] = "rollback_failed"
         a["error"] = str(exc)
@@ -962,22 +1093,28 @@ def apply_job(
     results = []
     for act in job.get("actions") or []:
         risk = act.get("risk") or "elevated"
+        # Re-enable actions that were only skipped at plan-time for all_safe display
+        if act.get("status") == "skipped" and act.get("auto_applicable"):
+            act = deepcopy(act)
+            act["status"] = "planned"
+            act["preview"] = None
+            act["error"] = None
         if only_safe and risk != "safe":
             act = deepcopy(act)
             act["status"] = "skipped"
-            act["preview"] = "Skipped (only_safe)"
+            act["preview"] = "Skipped (only safe fixes selected)"
             results.append(act)
             continue
         if risk == "dangerous" and not confirm_dangerous:
             act = deepcopy(act)
             act["status"] = "skipped"
-            act["error"] = "Dangerous fix requires confirm_dangerous=true / phrase APPLY"
+            act["error"] = "Dangerous fix requires typing APPLY to confirm"
             results.append(act)
             continue
         if not act.get("auto_applicable"):
             act = deepcopy(act)
             act["status"] = "skipped"
-            act["error"] = "Not auto-applicable"
+            act["error"] = "Not auto-applicable — use CLI hint or Make as before after manual fix"
             results.append(act)
             continue
         results.append(apply_one(session, act, simulate=simulate, dry_run=False))

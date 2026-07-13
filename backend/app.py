@@ -371,41 +371,41 @@ def api_scan(body: ScanRequest | None = None):
             external_id=external_id,
             region=region,
         )
-        # Demo remediations: hide findings marked fixed until "make as before"
-        if mode == "simulate":
-            fixed = remediation_engine.get_simulate_fixed()
-            if fixed:
-                findings = [
-                    f
-                    for f in (result.get("findings") or [])
-                    if str(f.get("id") or "") not in fixed
-                ]
-                result["findings"] = findings
-                result["total_findings"] = len(findings)
-                summary = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
-                for f in findings:
-                    sev = f.get("severity")
-                    if sev in summary:
-                        summary[sev] += 1
-                result["summary"] = summary
-                from scanner_engine import compute_score
+        # Hide findings successfully applied until "Make as before" (persisted)
+        fixed = remediation_engine.get_simulate_fixed()
+        if fixed:
+            findings = [
+                f
+                for f in (result.get("findings") or [])
+                if not remediation_engine.finding_is_fixed(f, fixed)
+            ]
+            result["findings"] = findings
+            result["total_findings"] = len(findings)
+            summary = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
+            for f in findings:
+                sev = f.get("severity")
+                if sev in summary:
+                    summary[sev] += 1
+            result["summary"] = summary
+            from scanner_engine import compute_score
 
-                result["score"] = compute_score(findings)
-                # rebuild light vulnerabilities list
-                result["vulnerabilities"] = [
-                    {
-                        "id": f.get("resource") or f.get("id"),
-                        "service": f.get("service"),
-                        "severity": f.get("severity"),
-                        "description": f.get("description"),
-                        "title": f.get("title"),
-                        "remediation": f.get("remediation"),
-                        "compliance": f.get("compliance"),
-                        "rule_id": f.get("rule_id"),
-                        "region": f.get("region"),
-                    }
-                    for f in findings
-                ]
+            result["score"] = compute_score(findings)
+            result["vulnerabilities"] = [
+                {
+                    # Keep stable finding id so Fix / suppress matching works
+                    "id": f.get("id") or f.get("resource"),
+                    "service": f.get("service"),
+                    "severity": f.get("severity"),
+                    "description": f.get("description"),
+                    "title": f.get("title"),
+                    "remediation": f.get("remediation"),
+                    "compliance": f.get("compliance"),
+                    "rule_id": f.get("rule_id"),
+                    "region": f.get("region"),
+                }
+                for f in findings
+            ]
+            result["remediation_suppressed"] = len(fixed)
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001

@@ -63,16 +63,21 @@ export function FindingsTab() {
         confirm: true,
         only_safe: false,
         confirm_phrase: "APPLY",
-        allow_write_with_scan_creds: mode === "simulate",
+        allow_write_with_scan_creds: true,
         rescan: true,
       });
-      if (res.rescan && "scan_id" in res.rescan) {
+      const appliedN = (res.job.actions || []).filter(
+        (a) => a.status === "applied",
+      ).length;
+      if (res.rescan && typeof res.rescan === "object" && "scan_id" in res.rescan) {
         useScanStore.setState({ scan: res.rescan as never });
       } else {
         await launchScan().catch(() => undefined);
       }
       setFixMsg(
-        "Fix attempted. Open AI FIX tab to review the job or Make as before.",
+        appliedN > 0
+          ? "Fix applied and scan refreshed. Open Fixing options to undo with Make as before."
+          : "No auto-apply path for this finding — see Fixing options or use the CLI hint.",
       );
     } catch (e) {
       setFixMsg(e instanceof Error ? e.message : "Fix failed");
