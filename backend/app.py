@@ -350,25 +350,27 @@ def connection(
 def api_scan(body: ScanRequest | None = None):
     """Run a scan using Settings credentials (body fields optional overrides)."""
     global latest_scan
-    body = body or ScanRequest()
-    rt = connection_store.resolve_runtime()
-
-    mode = body.mode or rt["auth_mode"]
-    role_arn = body.role_arn or rt.get("role_arn")
-    external_id = (
-        body.external_id
-        if body.external_id is not None
-        else (rt.get("external_id") or None)
-    )
-    region = body.region or rt.get("region") or "us-east-1"
-
     try:
+        body = body or ScanRequest()
+        rt = connection_store.resolve_runtime()
+
+        mode = body.mode or rt["auth_mode"]
+        role_arn = body.role_arn or rt.get("role_arn")
+        external_id = (
+            body.external_id
+            if body.external_id is not None
+            else (rt.get("external_id") or None)
+        )
+        region = body.region or rt.get("region") or "us-east-1"
+
         result = run_scan(
             mode=mode,
             role_arn=role_arn,
             external_id=external_id,
             region=region,
         )
+    except HTTPException:
+        raise
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=502,
