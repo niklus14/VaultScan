@@ -53,6 +53,8 @@ export function RemediationHubTab() {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [cliScript, setCliScript] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const refreshJobs = useCallback(async () => {
     try {
@@ -80,6 +82,10 @@ export function RemediationHubTab() {
         use_ai: useAi,
       });
       setJob(res.job);
+      const plannedCli = (res.job.actions || [])
+        .flatMap((a) => a.cli_commands || (a.cli_hint ? [a.cli_hint] : []))
+        .join("\n");
+      if (plannedCli) setCliScript(plannedCli);
       if (modePlan === "all_safe") {
         setOnlySafe(true);
       } else {
@@ -89,7 +95,7 @@ export function RemediationHubTab() {
       setMessage(
         `Plan ready: ${res.counts.total} actions · ${res.counts.auto} auto-applicable · ${res.counts.safe} safe` +
           (res.ai_used ? " · AI notes added" : "") +
-          ". Click APPLY FIXES next (APPLY is pre-filled for dangerous items).",
+          ". Click APPLY FIXES, or use MANUAL CLI SCRIPT if auto-apply fails.",
       );
       await refreshJobs();
     } catch (e) {
@@ -142,6 +148,13 @@ export function RemediationHubTab() {
         rescan: true,
       });
       setJob(res.job);
+      const script =
+        res.cli_script ||
+        res.job.cli_script ||
+        (res.job.actions || [])
+          .flatMap((a) => a.cli_commands || [])
+          .join("\n");
+      if (script) setCliScript(script);
       const appliedN = (res.job.actions || []).filter(
         (a) => a.status === "applied",
       ).length;
@@ -153,17 +166,15 @@ export function RemediationHubTab() {
       );
       const failedN = failedActs.length;
       const skippedN = skippedActs.length;
-      const skipReasons = skippedActs
-        .map((a) => a.error || a.preview)
-        .filter(Boolean)
-        .slice(0, 2);
-      const firstFail = failedActs[0]?.error || "";
+      const firstFail = (failedActs[0]?.error || "").split("\n")[0];
       if (appliedN === 0 || res.ok === false) {
         setError(
           [
             res.message,
             firstFail,
-            skipReasons.join(" · "),
+            script
+              ? "→ Use MANUAL CLI SCRIPT panel (Copy) and run in your terminal with lab-account AWS keys."
+              : null,
             onlySafe
               ? "“Only safe fixes” is checked — uncheck it to apply elevated lab findings."
               : null,
@@ -463,18 +474,52 @@ export function RemediationHubTab() {
                     </p>
                   )}
                   {a.error && (
-                    <p className="mt-1 font-mono text-[10px] text-danger">
-                      {a.error}
+                    <p className="mt-1 whitespace-pre-wrap font-mono text-[10px] text-danger">
+                      {a.error.split("--- MANUAL CLI")[0].trim()}
                     </p>
                   )}
-                  {a.cli_hint && !a.auto_applicable && (
-                    <pre className="mt-1.5 overflow-x-auto rounded border border-border bg-background p-2 font-mono text-[10px] text-success/80">
-                      {a.cli_hint}
+                  {(a.cli_commands?.length || a.cli_hint) && (
+                    <pre className="mt-1.5 max-h-40 overflow-auto rounded border border-success/30 bg-background p-2 font-mono text-[10px] text-success/90">
+                      {(a.cli_commands && a.cli_commands.length
+                        ? a.cli_commands.join("\n")
+                        : a.cli_hint) || ""}
                     </pre>
                   )}
                 </li>
               ))}
             </ul>
+          )}
+
+          {cliScript && (
+            <div className="mt-4 rounded-lg border border-warning/40 bg-warning/5 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h4 className="font-mono text-[11px] font-bold tracking-wider text-warning">
+                  MANUAL CLI SCRIPT (paste in terminal)
+                </h4>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(cliScript);
+                      setCopied(true);
+                      setTimeout(() => setCopied(false), 2000);
+                    } catch {
+                      /* ignore */
+                    }
+                  }}
+                  className="rounded border border-warning/40 bg-warning/15 px-2 py-1 font-mono text-[10px] font-bold text-warning hover:bg-warning/25"
+                >
+                  {copied ? "COPIED" : "COPY ALL"}
+                </button>
+              </div>
+              <p className="mt-1 font-mono text-[10px] text-muted-foreground">
+                Use AWS credentials for the same lab account as Settings Role ARN.
+                After running, re-scan in VaultScan to confirm fixes.
+              </p>
+              <pre className="mt-2 max-h-64 overflow-auto rounded border border-border bg-background p-2 font-mono text-[10px] text-foreground/90">
+                {cliScript}
+              </pre>
+            </div>
           )}
         </div>
 

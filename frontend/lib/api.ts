@@ -528,6 +528,7 @@ export interface FixAction {
   auto_applicable: boolean;
   requires_confirm: boolean;
   cli_hint?: string;
+  cli_commands?: string[];
   steps?: string[];
   status: FixActionStatus;
   preview?: string | null;
@@ -536,6 +537,7 @@ export interface FixAction {
   region?: string;
   service?: string;
   severity?: string;
+  evidence?: Record<string, unknown>;
 }
 
 export interface RemediateJob {
@@ -550,6 +552,8 @@ export interface RemediateJob {
   score_before?: number | null;
   score_after?: number | null;
   rollback_available?: boolean;
+  cli_script?: string;
+  code_version?: string;
 }
 
 export function planRemediation(body: {
@@ -596,6 +600,8 @@ export function applyRemediation(body: {
     rescan?: ScanResult | { error: string };
     message?: string;
     session_mode?: string;
+    code_version?: string;
+    cli_script?: string;
   }>("/api/remediate/apply", {
     method: "POST",
     body: JSON.stringify({

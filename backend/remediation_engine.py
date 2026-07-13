@@ -145,6 +145,7 @@ class FixAction:
     service: str = ""
     severity: str = "MEDIUM"
     evidence: dict[str, Any] = field(default_factory=dict)
+    cli_commands: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -327,6 +328,148 @@ def _risk_for_rule(rule_id: str) -> Risk:
     if rid in dangerous or rid.startswith("IAM-"):
         return "dangerous"
     return "elevated"
+
+
+def build_cli_commands(action: dict[str, Any] | FixAction) -> list[str]:
+    """
+    Paste-ready AWS CLI for a fix action (manual lab path).
+    Always generated so the UI can show commands when auto-apply fails.
+    """
+    if isinstance(action, FixAction):
+        a = action.to_dict()
+    else:
+        a = action
+    rid = str(a.get("rule_id") or "").upper()
+    resource = str(a.get("resource") or "").strip()
+    region = str(a.get("region") or "us-east-1")
+    name = _iam_role_name(resource)
+    ev = a.get("evidence") or {}
+    pol = str(ev.get("policy_name") or _policy_name_wanted(a) or "").strip()
+    lines: list[str] = []
+
+    if rid == "IAM-TRUST-WILDCARD":
+        # Safe EC2 trust for lab role names containing "ec2"
+        if "ec2" in name.lower():
+            principal = '{"Service": "ec2.amazonaws.com"}'
+        else:
+            principal = '{"AWS": "arn:aws:iam::ACCOUNT_ID:root"}  # replace ACCOUNT_ID'
+        lines = [
+            f"# --- {rid} on {name}: remove Principal * from trust ---",
+            f"cat > /tmp/vaultscan-trust-{name}.json << 'EOF'",
+            "{",
+            '  "Version": "2012-10-17",',
+            '  "Statement": [',
+            "    {",
+            '      "Effect": "Allow",',
+            f'      "Principal": {principal},',
+            '      "Action": "sts:AssumeRole"',
+            "    }",
+            "  ]",
+            "}",
+            "EOF",
+            f"aws iam update-assume-role-policy --role-name {name} "
+            f"--policy-document file:///tmp/vaultscan-trust-{name}.json",
+        ]
+    elif rid in ("IAM-ROLE-ADMIN",):
+        lines = [
+            f"# --- {rid}: detach AdministratorAccess from role {name} ---",
+            f"aws iam detach-role-policy --role-name {name} "
+            f"--policy-arn {_ADMIN_POLICY_ARN}",
+        ]
+    elif rid == "IAM-ADMIN-POLICY":
+        lines = [
+            f"# --- {rid}: detach AdministratorAccess from user {name} ---",
+            f"aws iam detach-user-policy --user-name {name} "
+            f"--policy-arn {_ADMIN_POLICY_ARN}",
+            f"# if that fails (entity is a role), use:",
+            f"# aws iam detach-role-policy --role-name {name} "
+            f"--policy-arn {_ADMIN_POLICY_ARN}",
+        ]
+    elif rid in (
+        "IAM-CLOUDTRAIL-DESTROY",
+        "IAM-IMAGE-LEAK",
+        "IAM-PRIVESC-NO-BOUNDARY",
+    ):
+        if pol:
+            lines = [
+                f"# --- {rid} on {name}: detach managed policy '{pol}' ---",
+                f"# List attached policies to get the full ARN:",
+                f"aws iam list-attached-user-policies --user-name {name}",
+                f"aws iam list-attached-role-policies --role-name {name}",
+                f"# Then detach (pick user OR role line that works):",
+                f"aws iam detach-user-policy --user-name {name} "
+                f"--policy-arn arn:aws:iam::ACCOUNT_ID:policy/{pol}",
+                f"# aws iam detach-role-policy --role-name {name} "
+                f"--policy-arn arn:aws:iam::ACCOUNT_ID:policy/{pol}",
+            ]
+        else:
+            lines = [
+                f"# --- {rid} on {name}: list then detach dangerous managed policy ---",
+                f"aws iam list-attached-user-policies --user-name {name}",
+                f"aws iam list-attached-role-policies --role-name {name}",
+                f"# aws iam detach-user-policy --user-name {name} --policy-arn <PolicyArn>",
+            ]
+    elif rid == "IAM-NO-MFA":
+        lines = [
+            f"# --- {rid}: MFA cannot be fully automated ---",
+            f"# Console: IAM → Users → {name} → Security credentials → Assign MFA device",
+            f"# Or create virtual MFA and enable:",
+            f"# aws iam create-virtual-mfa-device --virtual-mfa-device-name {name}-mfa "
+            f"--outfile /tmp/qr.png --bootstrap-method QRCodePNG",
+            f"# aws iam enable-mfa-device --user-name {name} "
+            f"--serial-number arn:aws:iam::ACCOUNT_ID:mfa/{name}-mfa "
+            f"--authentication-code1 <code1> --authentication-code2 <code2>",
+        ]
+    elif rid in ("S3-BPA-INCOMPLETE", "S3-BPA-MISSING"):
+        lines = [
+            f"# --- {rid}: block public access on bucket {resource} ---",
+            f"aws s3api put-public-access-block --bucket {resource} "
+            f"--public-access-block-configuration "
+            f"BlockPublicAcls=true,IgnorePublicAcls=true,"
+            f"BlockPublicPolicy=true,RestrictPublicBuckets=true",
+        ]
+    elif rid == "S3-PUBLIC-ACL":
+        lines = [
+            f"aws s3api put-bucket-acl --bucket {resource} --acl private",
+        ]
+    elif rid.startswith("SG-OPEN") or rid == "SG-OPEN-ALL":
+        lines = [
+            f"# --- {rid}: review and revoke 0.0.0.0/0 on {resource} ---",
+            f"aws ec2 describe-security-groups --group-ids {resource} --region {region}",
+            f"# aws ec2 revoke-security-group-ingress --group-id {resource} "
+            f"--ip-permissions <from describe> --region {region}",
+        ]
+    elif rid == "EC2-IMDSV1":
+        iid = resource.split("(")[0].strip()
+        lines = [
+            f"aws ec2 modify-instance-metadata-options --instance-id {iid} "
+            f"--http-tokens required --http-endpoint enabled --region {region}",
+        ]
+    else:
+        hint = str(a.get("cli_hint") or "").strip()
+        if hint:
+            lines = [f"# --- {rid} on {resource} ---", hint]
+        else:
+            lines = [f"# No CLI template for {rid} — fix in AWS console for {resource}"]
+
+    return lines
+
+
+def cli_script_for_actions(actions: list[dict[str, Any]]) -> str:
+    """One pasteable shell script for all actions (failed + planned)."""
+    chunks = [
+        "#!/usr/bin/env bash",
+        "# VaultScan Fixing options — run with credentials for the LAB account",
+        "# (same account as Role ARN arn:aws:iam::ACCOUNT:role/...)",
+        "set -euo pipefail",
+        "",
+    ]
+    for a in actions:
+        cmds = a.get("cli_commands") or build_cli_commands(a)
+        if cmds:
+            chunks.extend(cmds)
+            chunks.append("")
+    return "\n".join(chunks).rstrip() + "\n"
 
 
 def _auto_applicable(rule_id: str) -> bool:
@@ -560,7 +703,7 @@ def build_action_from_finding(finding: dict[str, Any]) -> FixAction:
             steps.insert(1, f"Suggested: {cli}")
         auto = False
 
-    return FixAction(
+    action = FixAction(
         action_id=f"act-{uuid.uuid4().hex[:10]}",
         rule_id=rule_id,
         finding_id=finding_id,
@@ -578,6 +721,10 @@ def build_action_from_finding(finding: dict[str, Any]) -> FixAction:
         severity=severity,
         evidence=dict(evidence) if isinstance(evidence, dict) else {},
     )
+    action.cli_commands = build_cli_commands(action)
+    if not action.cli_hint:
+        action.cli_hint = "\n".join(action.cli_commands)
+    return action
 
 
 def plan_from_scan(
@@ -1722,12 +1869,26 @@ def apply_job(
             act["error"] = None
             act["status"] = "planned"
 
-        results.append(apply_one(session, act, simulate=simulate, dry_run=False))
+        result = apply_one(session, act, simulate=simulate, dry_run=False)
+        # Always attach paste-ready CLI (manual path when auto fails)
+        result["cli_commands"] = build_cli_commands(result)
+        if result.get("status") == "failed":
+            cli_block = "\n".join(result["cli_commands"])
+            err = result.get("error") or ""
+            # Never leave users stuck with vague errors — append runnable CLI
+            if "MANUAL CLI" not in err:
+                result["error"] = (
+                    f"{err}\n\n--- MANUAL CLI (paste in terminal with lab account) ---\n"
+                    f"{cli_block}"
+                ).strip()
+        results.append(result)
 
     job["actions"] = results
     job["status"] = "applied"
     job["updated_at"] = utcnow()
     job["rollback_available"] = any(a.get("status") == "applied" for a in results)
+    job["cli_script"] = cli_script_for_actions(results)
+    job["code_version"] = "2026-07-14-cli-manual-v5"
     return _upsert_job(job)
 
 

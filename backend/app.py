@@ -214,7 +214,7 @@ def _connection_payload(info, *, mode: str) -> dict[str, Any]:
 
 
 # Bump when real-AWS apply path changes so we can confirm the right build is live.
-CODE_VERSION = "2026-07-14-iam-user-detach-v4"
+CODE_VERSION = "2026-07-14-cli-manual-v5"
 
 
 @app.get("/api/health")
@@ -954,31 +954,43 @@ def remediate_apply(body: RemediateJobRequest):
     except Exception as exc:  # noqa: BLE001
         rescan = {"error": str(exc)}
 
+    cli_script = job.get("cli_script") or remediation_engine.cli_script_for_actions(
+        job.get("actions") or []
+    )
+    job["cli_script"] = cli_script
+
     if applied == 0:
         first_err = (
             (failed[0].get("error") if failed else None)
             or (failed[0].get("preview") if failed else None)
             or "All actions skipped — uncheck only-safe and type APPLY for dangerous items."
         )
+        # Shorten top banner — full CLI is in job.cli_script
+        short = (first_err or "").split("\n")[0][:220]
         return {
             "ok": False,
             "job": job,
             "rescan": rescan,
             "session_mode": label,
+            "code_version": CODE_VERSION,
+            "cli_script": cli_script,
             "message": (
-                f"No AWS changes applied ({skipped} skipped, {len(failed)} failed) "
-                f"[session={label}]. {first_err}"
+                f"No AWS auto-changes ({skipped} skipped, {len(failed)} failed) "
+                f"[session={label}] [build={CODE_VERSION}]. {short} "
+                "Copy the MANUAL CLI SCRIPT below and run it with lab-account AWS credentials."
             ),
         }
 
     fail_note = ""
     if failed:
-        fail_note = f" {len(failed)} failed (see each action error)."
+        fail_note = f" {len(failed)} failed — use MANUAL CLI SCRIPT for those."
     return {
         "ok": True,
         "job": job,
         "rescan": rescan,
         "session_mode": label,
+        "code_version": CODE_VERSION,
+        "cli_script": cli_script,
         "message": (
             f"Applied {applied} fix(es) via {label}.{fail_note} "
             "Re-scan uses live AWS. Make as before undoes this job when snapshots exist."

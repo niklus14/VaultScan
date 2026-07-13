@@ -25,8 +25,12 @@ const nextConfig: NextConfig = {
     unoptimized: true,
   },
 
-  // Proxy browser /api/* → FastAPI so the UI can stay same-origin on Vercel
+  // Local dev: proxy /api → FastAPI. On Vercel multi-service, root vercel.json
+  // routes /api to the backend service — do NOT rewrite to localhost.
   async rewrites() {
+    if (process.env.VERCEL) {
+      return []
+    }
     return [
       {
         source: "/api/:path*",
