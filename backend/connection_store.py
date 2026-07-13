@@ -398,16 +398,19 @@ def record_test_result(
 
 def resolve_runtime() -> dict[str, Any]:
     p = get_profile()
+    # Prefer Settings UI store; fall back to backend env (needed when UI store is empty on cold start)
     return {
         "provider": (p.get("provider") or "aws").lower(),
         "auth_mode": p.get("auth_mode") or "assume_role",
-        "role_arn": p.get("role_arn") or settings.aws_role_arn,
-        "external_id": p.get("external_id") or "",
-        "region": p.get("region") or settings.aws_region,
+        "role_arn": (p.get("role_arn") or settings.aws_role_arn or "").strip(),
+        "external_id": (p.get("external_id") or settings.aws_external_id or "").strip(),
+        "region": p.get("region") or settings.aws_region or "us-east-1",
         "session_name": p.get("session_name") or settings.aws_session_name,
-        "access_key_id": p.get("access_key_id") or "",
-        "secret_access_key": p.get("secret_access_key") or "",
-        "session_token": p.get("session_token") or "",
+        "access_key_id": (p.get("access_key_id") or settings.aws_access_key_id or "").strip(),
+        "secret_access_key": (
+            p.get("secret_access_key") or settings.aws_secret_access_key or ""
+        ).strip(),
+        "session_token": (p.get("session_token") or settings.aws_session_token or "").strip(),
         "connection_name": p.get("connection_name") or "Primary Cloud Account",
         "gcp_project_id": p.get("gcp_project_id") or "",
         "gcp_service_account_json": p.get("gcp_service_account_json") or "",

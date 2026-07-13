@@ -304,10 +304,9 @@ export function RemediationHubTab() {
               DEMO MODE — apply/rollback are simulated
             </span>
           ) : (
-            <span className="rounded border border-warning/30 bg-warning/10 px-2 py-1 font-mono text-[10px] text-warning">
-              REAL AWS — Apply prefers the same AssumeRole as scan (target
-              account), then your Access Keys. Keys + role must be in the account
-              where findings live.
+            <span className="rounded border border-accent-blue/30 bg-accent-blue/10 px-2 py-1 font-mono text-[10px] text-accent-blue">
+              REAL AWS — Apply uses Access Key + Secret to AssumeRole into your
+              Role ARN (same as scan), then runs fixes in that account.
             </span>
           )}
         </div>

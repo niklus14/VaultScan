@@ -897,20 +897,23 @@ def remediate_apply(body: RemediateJobRequest):
     if applied == 0:
         first_err = (
             (failed[0].get("error") if failed else None)
-            or "All actions skipped — uncheck only-safe, type APPLY for dangerous items, "
-            "or grant write IAM on your Access Key user."
+            or (failed[0].get("preview") if failed else None)
+            or "All actions skipped — uncheck only-safe and type APPLY for dangerous items."
         )
         return {
             "ok": False,
             "job": job,
             "rescan": rescan,
             "session_mode": label,
-            "message": f"No AWS changes applied ({skipped} skipped, {len(failed)} failed). {first_err}",
+            "message": (
+                f"No AWS changes applied ({skipped} skipped, {len(failed)} failed) "
+                f"[session={label}]. {first_err}"
+            ),
         }
 
     fail_note = ""
     if failed:
-        fail_note = f" {len(failed)} failed with AWS errors (often AccessDenied — see each action)."
+        fail_note = f" {len(failed)} failed (see each action error)."
     return {
         "ok": True,
         "job": job,

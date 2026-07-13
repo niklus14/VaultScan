@@ -185,17 +185,22 @@ def get_remediate_session(
     remediator_role_arn: str | None = None,
 ) -> tuple[boto3.Session | None, str, str | None]:
     """
-    Session used to APPLY fixes (writes).
+    Session used to APPLY fixes (writes) for **real AWS**.
 
     Returns (session, mode_label, error).
 
-    Priority for real AWS:
-    1. Optional remediator_role_arn
-    2. **Same AssumeRole as scan** (lab roles often have write; resources live in that account)
-    3. Base Access Key session (direct) — same account as the keys
+    With Access Key + Secret + Role ARN (assume_role) — the normal lab setup —
+    fixes MUST run **after AssumeRole into that Role ARN**. Findings live in the
+    role's account; calling IAM with only the base keys often returns NoSuchEntity
+    when the role (or other resources) are not in the key user's home account view.
+
+    Priority:
+    1. remediator_role_arn if set
+    2. Settings Role ARN (same as scan) when auth_mode is assume_role **or** a role ARN is set
+    3. direct Access Keys only when auth_mode is direct
     """
     rt = resolve_runtime()
-    auth_mode = rt.get("auth_mode") or "simulate"
+    auth_mode = (rt.get("auth_mode") or "assume_role").strip()
     region = rt.get("region") or "us-east-1"
 
     if auth_mode == "simulate":
@@ -208,27 +213,45 @@ def get_remediate_session(
             "Write remediations require allow_write=true.",
         )
 
-    if not rt.get("access_key_id") or not rt.get("secret_access_key"):
+    # Fall back to process env if Settings UI store is empty (e.g. Vercel cold start)
+    access_key = (rt.get("access_key_id") or settings.aws_access_key_id or "").strip()
+    secret_key = (rt.get("secret_access_key") or settings.aws_secret_access_key or "").strip()
+    session_token = (rt.get("session_token") or settings.aws_session_token or "").strip()
+    role_arn = (
+        remediator_role_arn
+        or rt.get("remediator_role_arn")
+        or rt.get("role_arn")
+        or settings.aws_role_arn
+        or ""
+    ).strip()
+    external_id = (rt.get("external_id") or settings.aws_external_id or "").strip()
+
+    if not access_key or not secret_key:
         return (
             None,
             auth_mode,
-            "No Access Key/Secret in Settings. Save IAM credentials that can modify the target account.",
+            "No Access Key/Secret loaded. Re-save them in Settings (server storage is ephemeral on Vercel) or set AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY on the backend.",
         )
 
-    base = _base_session(rt)
-    errors: list[str] = []
+    base_kwargs: dict[str, Any] = {
+        "region_name": region,
+        "aws_access_key_id": access_key,
+        "aws_secret_access_key": secret_key,
+    }
+    if session_token:
+        base_kwargs["aws_session_token"] = session_token
+    base = boto3.Session(**base_kwargs)
 
-    def _assume(role_arn: str, label: str) -> tuple[boto3.Session | None, str, str | None]:
+    def _assume(target_role: str, label: str) -> tuple[boto3.Session | None, str, str | None]:
         try:
             sts = base.client("sts", config=Config(retries={"max_attempts": 3}))
             params: dict[str, Any] = {
-                "RoleArn": role_arn,
+                "RoleArn": target_role,
                 "RoleSessionName": (rt.get("session_name") or "VaultScanRemediate")[:64],
                 "DurationSeconds": 3600,
             }
-            ext = rt.get("external_id") or ""
-            if ext:
-                params["ExternalId"] = ext
+            if external_id:
+                params["ExternalId"] = external_id
             resp = sts.assume_role(**params)
             creds = resp["Credentials"]
             session = boto3.Session(
@@ -237,38 +260,58 @@ def get_remediate_session(
                 aws_session_token=creds["SessionToken"],
                 region_name=region,
             )
-            # prove identity
-            session.client("sts").get_caller_identity()
-            return session, label, None
+            ident = session.client("sts").get_caller_identity()
+            return (
+                session,
+                f"{label}:account={ident.get('Account')}:arn={ident.get('Arn')}",
+                None,
+            )
         except (ClientError, BotoCoreError) as exc:
             return None, label, str(exc)
 
-    # 1) Explicit remediator role
-    role = (remediator_role_arn or rt.get("remediator_role_arn") or "").strip()
-    if role and ":role/" in role:
-        sess, label, err = _assume(role, "remediator_role")
+    # Prefer any role ARN for fixes (same account as scan findings)
+    if role_arn and ":role/" in role_arn:
+        sess, label, err = _assume(role_arn, "assume_role")
         if sess:
             return sess, label, None
-        if err:
-            errors.append(f"remediator role: {err}")
+        # Do not silently fall back to base keys for assume_role mode —
+        # that is exactly what caused NoSuchEntity on cross-account / role resources.
+        if auth_mode == "assume_role":
+            return (
+                None,
+                "assume_role",
+                (
+                    f"Could not AssumeRole for fixes using {role_arn}: {err}. "
+                    "Scan and Fix both need this Role ARN to work. "
+                    "Confirm Access Key may sts:AssumeRole that ARN and the role still exists."
+                ),
+            )
+        # direct mode with optional role: fall through to keys after recording error
+        assume_err = err
+    else:
+        assume_err = None
 
-    # 2) Same role used for scanning (resources are in that account; lab admin roles can write)
-    scan_role = (rt.get("role_arn") or "").strip()
-    if auth_mode == "assume_role" and scan_role and ":role/" in scan_role:
-        sess, label, err = _assume(scan_role, "scan_assume_role")
-        if sess:
-            return sess, label, None
-        if err:
-            errors.append(f"scan role assume: {err}")
+    if auth_mode == "direct" or not role_arn:
+        try:
+            sts = base.client("sts")
+            ident = sts.get_caller_identity()
+            return (
+                base,
+                f"direct_keys:account={ident.get('Account')}:arn={ident.get('Arn')}",
+                None,
+            )
+        except (ClientError, BotoCoreError) as exc:
+            msg = str(exc)
+            if assume_err:
+                msg = f"{assume_err} | direct keys: {msg}"
+            return None, "direct_keys", msg
 
-    # 3) Base access keys (must be same account as the resources)
-    try:
-        sts = base.client("sts")
-        ident = sts.get_caller_identity()
-        return base, f"direct_keys:{ident.get('Account')}", None
-    except (ClientError, BotoCoreError) as exc:
-        errors.append(f"direct keys: {exc}")
-        return None, "direct_keys", " | ".join(errors)
+    return (
+        None,
+        auth_mode,
+        assume_err
+        or "Could not build a remediation session. Check Access Key, Secret, and Role ARN in Settings.",
+    )
 
 
 def probe_connection(
