@@ -24,6 +24,7 @@ import {
   type AttackPathEnriched,
 } from "@/lib/api";
 import {
+  CursorGlow,
   MagneticCard,
   RippleSurface,
   SpotlightFrame,
@@ -174,14 +175,15 @@ function CinematicGraph({
   activeStep: number;
   onStep: (i: number) => void;
 }) {
+  const steps = path.steps ?? [];
   const nodes = [
-    ...path.steps.map((s, i) => ({
+    ...steps.map((s, i) => ({
       ...s,
       idx: i,
       kind: "step" as const,
     })),
     {
-      idx: path.steps.length,
+      idx: steps.length,
       kind: "impact" as const,
       role: "impact",
       title: path.outcome,
@@ -214,7 +216,9 @@ function CinematicGraph({
           >
             <MagneticCard
               strength={14}
-              onClick={() => onStep(Math.min(i, path.steps.length - 1))}
+              onClick={() =>
+                onStep(Math.min(i, Math.max(steps.length - 1, 0)))
+              }
               className="relative z-10 w-full max-w-[220px]"
             >
               <RippleSurface
@@ -610,12 +614,13 @@ export function AttackPathsTab() {
                       </div>
                       <pre className="whitespace-pre-wrap font-mono text-xs leading-relaxed text-foreground/90">
                         {path.attacker_playbook ||
-                          path.steps
+                          (path.steps ?? [])
                             .map(
                               (s, i) =>
                                 `${i + 1}. Abuse ${s.service}: ${s.title}`,
                             )
-                            .join("\n")}
+                            .join("\n") ||
+                          "No playbook steps available for this path."}
                       </pre>
                     </SpotlightFrame>
                   </MagneticCard>
@@ -631,11 +636,11 @@ export function AttackPathsTab() {
                         </h4>
                       </div>
                       <ol className="list-decimal space-y-2 pl-4 text-sm leading-relaxed text-foreground/90">
-                        {path.break_chain.map((b) => (
-                          <li key={b}>{b}</li>
+                        {(path.break_chain ?? []).map((b, i) => (
+                          <li key={`${i}-${b}`}>{b}</li>
                         ))}
                       </ol>
-                      {path.steps[activeStep]?.remediation && (
+                      {path.steps?.[activeStep]?.remediation && (
                         <div className="mt-4 rounded-md border border-border bg-background p-3">
                           <p className="font-mono text-[10px] text-muted-foreground">
                             FIX FOR SELECTED STEP
