@@ -95,12 +95,41 @@ def assume_role(rt: dict[str, Any] | None = None) -> tuple[boto3.Session, AwsCon
     if external_id:
         params["ExternalId"] = external_id
 
+    # Remember the Access Key user so trust-policy fixes can keep this principal
+    try:
+        base_ident = sts.get_caller_identity()
+        base_arn = base_ident.get("Arn") or ""
+        if ":user/" in base_arn:
+            try:
+                from connection_store import update_profile
+
+                update_profile({"operator_arn": base_arn})
+            except Exception:  # noqa: BLE001
+                pass
+    except Exception:  # noqa: BLE001
+        base_arn = ""
+
     try:
         resp = sts.assume_role(**params)
     except (ClientError, BotoCoreError) as exc:
+        err = str(exc)
+        recovery = ""
+        if "AccessDenied" in err or "not authorized" in err.lower():
+            recovery = (
+                " Likely cause: the role trust was tightened (Principal * removed) "
+                "and no longer trusts your Access Key user. "
+                f"Operator: {base_arn or 'unknown'}. "
+                "In the LAB account (the account that owns the Role ARN), restore trust "
+                "so your user can sts:AssumeRole again, e.g. add Principal AWS = your user ARN "
+                "(not *). Then re-test connection. "
+                "CLI (run with admin keys of the lab account 850919910218):\n"
+                "  aws iam update-assume-role-policy --role-name demo-test-vulnerable-ec2-role "
+                "--policy-document file://trust-with-operator.json"
+            )
         raise RuntimeError(
             f"Failed to assume role {role_arn}: {exc}. "
             "Confirm the Access Key user is trusted by the role and has sts:AssumeRole."
+            f"{recovery}"
         ) from exc
 
     creds = resp["Credentials"]
@@ -283,7 +312,10 @@ def get_remediate_session(
                 (
                     f"Could not AssumeRole for fixes using {role_arn}: {err}. "
                     "Scan and Fix both need this Role ARN to work. "
-                    "Confirm Access Key may sts:AssumeRole that ARN and the role still exists."
+                    "If you just fixed IAM-TRUST-WILDCARD, the role may no longer trust "
+                    "your Access Key user (Principal * was removed). "
+                    "In the LAB account that owns the role, add your user ARN to the trust "
+                    "policy (not *), then Test Connection again."
                 ),
             )
         # direct mode with optional role: fall through to keys after recording error

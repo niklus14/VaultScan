@@ -320,6 +320,8 @@ def update_profile(payload: dict[str, Any]) -> dict[str, Any]:
             "session_name",
             "gcp_project_id",
             "gcp_service_account_email",
+            "operator_arn",
+            "last_operator_arn",
         ):
             if key in payload and payload[key] is not None:
                 current[key] = str(payload[key]).strip()

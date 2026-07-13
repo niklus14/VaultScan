@@ -214,7 +214,7 @@ def _connection_payload(info, *, mode: str) -> dict[str, Any]:
 
 
 # Bump when real-AWS apply path changes so we can confirm the right build is live.
-CODE_VERSION = "2026-07-14-cli-manual-v5"
+CODE_VERSION = "2026-07-14-trust-keep-operator-v6"
 
 
 @app.get("/api/health")

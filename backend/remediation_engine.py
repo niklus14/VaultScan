@@ -348,20 +348,22 @@ def build_cli_commands(action: dict[str, Any] | FixAction) -> list[str]:
     lines: list[str] = []
 
     if rid == "IAM-TRUST-WILDCARD":
-        # Safe EC2 trust for lab role names containing "ec2"
-        if "ec2" in name.lower():
-            principal = '{"Service": "ec2.amazonaws.com"}'
-        else:
-            principal = '{"AWS": "arn:aws:iam::ACCOUNT_ID:root"}  # replace ACCOUNT_ID'
+        # Keep operator user so VaultScan can still AssumeRole after removing *
+        ops = _operator_arns_for_trust()
+        op_example = ops[0] if ops else "arn:aws:iam::148018683717:user/ofa-admin-user"
         lines = [
-            f"# --- {rid} on {name}: remove Principal * from trust ---",
+            f"# --- {rid} on {name}: remove Principal * but KEEP your operator user ---",
+            f"# IMPORTANT: if you only leave ec2.amazonaws.com, Access Keys cannot AssumeRole anymore.",
             f"cat > /tmp/vaultscan-trust-{name}.json << 'EOF'",
             "{",
             '  "Version": "2012-10-17",',
             '  "Statement": [',
             "    {",
             '      "Effect": "Allow",',
-            f'      "Principal": {principal},',
+            '      "Principal": {',
+            '        "Service": "ec2.amazonaws.com",',
+            f'        "AWS": "{op_example}"',
+            "      },",
             '      "Action": "sts:AssumeRole"',
             "    }",
             "  ]",
@@ -369,6 +371,7 @@ def build_cli_commands(action: dict[str, Any] | FixAction) -> list[str]:
             "EOF",
             f"aws iam update-assume-role-policy --role-name {name} "
             f"--policy-document file:///tmp/vaultscan-trust-{name}.json",
+            f"# Run the aws command with admin credentials of the LAB account that owns the role.",
         ]
     elif rid in ("IAM-ROLE-ADMIN",):
         lines = [
@@ -1014,15 +1017,83 @@ def _strip_public_policy_doc(doc: dict[str, Any]) -> dict[str, Any] | None:
     return out
 
 
-def _tighten_trust_policy(doc: dict[str, Any], *, account_id: str, role_name: str) -> dict[str, Any]:
+def _operator_arns_for_trust() -> list[str]:
     """
-    Replace Principal * / AWS:* with a safe principal.
-    EC2-style roles → Service: ec2.amazonaws.com; else account root.
+    ARNs that must still be able to AssumeRole after we remove Principal *.
+    Without this, fixing trust * locks VaultScan out of the lab role.
     """
+    out: list[str] = []
+    try:
+        from connection_store import get_profile, resolve_runtime
+
+        p = get_profile()
+        for key in ("operator_arn", "last_operator_arn", "last_caller_arn"):
+            arn = (p.get(key) or "").strip()
+            if arn.startswith("arn:aws:iam::") and ":user/" in arn:
+                out.append(arn)
+            # sts assumed-role ARNs are not valid trust principals for re-assume
+        rt = resolve_runtime()
+        ak = (rt.get("access_key_id") or "").strip()
+        sk = (rt.get("secret_access_key") or "").strip()
+        if ak and sk:
+            import boto3 as _boto3
+
+            kwargs: dict[str, Any] = {
+                "aws_access_key_id": ak,
+                "aws_secret_access_key": sk,
+                "region_name": rt.get("region") or "us-east-1",
+            }
+            tok = (rt.get("session_token") or "").strip()
+            if tok:
+                kwargs["aws_session_token"] = tok
+            ident = _boto3.Session(**kwargs).client("sts").get_caller_identity()
+            arn = ident.get("Arn") or ""
+            # Convert assumed-role session to nothing; keep IAM user ARNs
+            if ":user/" in arn:
+                out.append(arn)
+            elif ":assumed-role/" in arn:
+                # cannot put session ARN in trust; prefer stored operator
+                pass
+            acct = ident.get("Account")
+            if acct:
+                out.append(f"arn:aws:iam::{acct}:root")
+    except Exception:  # noqa: BLE001
+        pass
+    # unique preserve order
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for a in out:
+        if a and a not in seen:
+            seen.add(a)
+            uniq.append(a)
+    return uniq
+
+
+def _tighten_trust_policy(
+    doc: dict[str, Any],
+    *,
+    account_id: str,
+    role_name: str,
+    operator_arns: list[str] | None = None,
+) -> dict[str, Any]:
+    """
+    Replace Principal * / AWS:* with least-privilege principals.
+
+    Always keeps:
+    - EC2 service principal for EC2-style lab roles
+    - role account root (break-glass)
+    - operator ARNs (Access Key user) so VaultScan can still AssumeRole after the fix
+    """
+    ops = [a for a in (operator_arns or _operator_arns_for_trust()) if a]
+    aws_principals: list[str] = [f"arn:aws:iam::{account_id}:root"]
+    for a in ops:
+        if a not in aws_principals:
+            aws_principals.append(a)
+
     stmts = doc.get("Statement", [])
     if isinstance(stmts, dict):
         stmts = [stmts]
-    new_stmts = []
+    new_stmts: list[dict[str, Any]] = []
     for st in stmts:
         if not isinstance(st, dict):
             continue
@@ -1030,22 +1101,17 @@ def _tighten_trust_policy(doc: dict[str, Any], *, account_id: str, role_name: st
         if str(st.get("Effect", "Allow")).lower() == "allow" and _principal_is_public(
             st.get("Principal")
         ):
+            principal: dict[str, Any] = {"AWS": aws_principals if len(aws_principals) > 1 else aws_principals[0]}
             if "ec2" in role_name.lower():
-                st["Principal"] = {"Service": "ec2.amazonaws.com"}
-            else:
-                st["Principal"] = {
-                    "AWS": f"arn:aws:iam::{account_id}:root"
-                }
-            # keep Action sts:AssumeRole
+                principal["Service"] = "ec2.amazonaws.com"
+            st["Principal"] = principal
             if not st.get("Action"):
                 st["Action"] = "sts:AssumeRole"
         new_stmts.append(st)
     if not new_stmts:
-        # minimal safe trust so the role is not left unusable
+        principal = {"AWS": aws_principals if len(aws_principals) > 1 else aws_principals[0]}
         if "ec2" in role_name.lower():
-            principal: Any = {"Service": "ec2.amazonaws.com"}
-        else:
-            principal = {"AWS": f"arn:aws:iam::{account_id}:root"}
+            principal["Service"] = "ec2.amazonaws.com"
         new_stmts = [
             {
                 "Effect": "Allow",
@@ -1053,6 +1119,16 @@ def _tighten_trust_policy(doc: dict[str, Any], *, account_id: str, role_name: st
                 "Action": "sts:AssumeRole",
             }
         ]
+    # Dedicated operator statement so scanners never get locked out
+    if ops:
+        new_stmts.append(
+            {
+                "Sid": "VaultScanOperatorAccess",
+                "Effect": "Allow",
+                "Principal": {"AWS": ops if len(ops) > 1 else ops[0]},
+                "Action": "sts:AssumeRole",
+            }
+        )
     return {"Version": doc.get("Version") or "2012-10-17", "Statement": new_stmts}
 
 
@@ -1366,8 +1442,12 @@ def apply_one(
                 or caller.get("Account")
                 or session.client("sts").get_caller_identity()["Account"]
             )
+            operator_arns = _operator_arns_for_trust()
             tight = _tighten_trust_policy(
-                doc, account_id=account_id, role_name=role_name
+                doc,
+                account_id=account_id,
+                role_name=role_name,
+                operator_arns=operator_arns,
             )
             policy_json = json.dumps(tight)
             try:
@@ -1386,8 +1466,9 @@ def apply_one(
                     f"{msg}"
                 ) from e
             a["preview"] = (
-                f"LIVE AWS: updated trust policy on {role_name} — removed Principal * "
-                f"(now ec2.amazonaws.com or account root) [account={account_id}]"
+                f"LIVE AWS: updated trust on {role_name} — removed Principal * "
+                f"(kept ec2/service + account root + operator {operator_arns or 'n/a'}) "
+                f"[account={account_id}]"
             )
             a["status"] = "applied"
             a["error"] = None
