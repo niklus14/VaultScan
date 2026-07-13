@@ -213,12 +213,18 @@ def _connection_payload(info, *, mode: str) -> dict[str, Any]:
     }
 
 
+# Bump when real-AWS apply path changes so we can confirm the right build is live.
+CODE_VERSION = "2026-07-14-trust-live-v3"
+
+
 @app.get("/api/health")
 def health():
     view = connection_store.public_view()
     return {
         "ok": True,
         "service": "vaultscan-api",
+        "code_version": CODE_VERSION,
+        "trust_apply": "live_boto3",  # IAM-TRUST-WILDCARD uses UpdateAssumeRolePolicy
         "grok_configured": bool(settings.grok_api_key),
         "default_role_arn": view.get("role_arn"),
         "region": view.get("region"),
@@ -741,6 +747,14 @@ class RemediateJobRequest(BaseModel):
     only_safe: bool = False
     allow_write_with_scan_creds: bool = False
     rescan: bool = True
+    # Optional re-hydrate for Vercel (ephemeral /tmp may lose Settings between calls)
+    access_key_id: str | None = None
+    secret_access_key: str | None = None
+    session_token: str | None = None
+    role_arn: str | None = None
+    auth_mode: Literal["assume_role", "direct", "simulate"] | None = None
+    region: str | None = None
+    external_id: str | None = None
 
 
 class RemediateRollbackRequest(BaseModel):
@@ -750,6 +764,49 @@ class RemediateRollbackRequest(BaseModel):
     confirm_phrase: str | None = None
     allow_write_with_scan_creds: bool = False
     rescan: bool = True
+    access_key_id: str | None = None
+    secret_access_key: str | None = None
+    session_token: str | None = None
+    role_arn: str | None = None
+    auth_mode: Literal["assume_role", "direct", "simulate"] | None = None
+    region: str | None = None
+    external_id: str | None = None
+
+
+def _hydrate_connection_from_body(body: object) -> None:
+    """Merge optional AWS secrets from the request into the runtime store."""
+    payload: dict[str, Any] = {}
+    for key in (
+        "access_key_id",
+        "secret_access_key",
+        "session_token",
+        "role_arn",
+        "auth_mode",
+        "region",
+        "external_id",
+    ):
+        val = getattr(body, key, None)
+        if val is not None and str(val).strip() != "":
+            payload[key] = val
+    if not payload:
+        return
+    try:
+        connection_store.update_profile(payload)
+    except ValueError as exc:
+        # Still try to stash keys if only role ARN validation failed mid-save
+        if payload.get("access_key_id") or payload.get("secret_access_key"):
+            try:
+                connection_store.update_profile(
+                    {
+                        k: v
+                        for k, v in payload.items()
+                        if k in ("access_key_id", "secret_access_key", "session_token", "region")
+                    }
+                )
+            except ValueError:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        else:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _remediate_session(allow_write_with_scan_creds: bool = False):
@@ -850,6 +907,7 @@ def remediate_apply(body: RemediateJobRequest):
             status_code=400,
             detail="Set confirm=true to apply remediations.",
         )
+    _hydrate_connection_from_body(body)
     confirm_dangerous = (body.confirm_phrase or "").strip().upper() == "APPLY"
     session, simulate, err, label = _remediate_session(
         allow_write_with_scan_creds=bool(body.allow_write_with_scan_creds)

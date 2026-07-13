@@ -878,9 +878,9 @@ def apply_one(
             a["preview"] = "No automated apply path — AI/CLI plan only"
         return a
 
-    if simulate or session is None:
-        # Demo apply: persist suppress keys (serverless-safe).
-        # Also mark rule_id alone — simulate re-scans often mint new resource IDs (e.g. sg-*).
+    # Demo / simulate ONLY when explicitly requested. Never treat a missing
+    # live session as success — that hid real AWS apply failures.
+    if simulate:
         fid = str(a.get("finding_id") or "")
         if fid:
             mark_fixed(fid)
@@ -891,6 +891,15 @@ def apply_one(
         a["status"] = "applied"
         a["preview"] = f"[demo] Simulated apply of {rid} on {resource}"
         a["error"] = None
+        return a
+
+    if session is None:
+        a["status"] = "failed"
+        a["error"] = (
+            f"No live AWS session for {rid} on {resource}. "
+            "Re-save Access Key + Secret + Role ARN in Settings, Test Connection, "
+            "then PLAN ALL → APPLY FIXES again (Vercel storage is ephemeral)."
+        )
         return a
 
     try:
@@ -1058,9 +1067,13 @@ def apply_one(
                     "Could not find/detach matching managed policy — apply manually"
                 )
         elif rid == "IAM-TRUST-WILDCARD":
+            # Live AWS: tighten trust policy with iam:UpdateAssumeRolePolicy
+            # (NOT manual-only — that old path is removed).
             iam = session.client("iam")
             role_name = _iam_role_name(
-                (a.get("snapshot") or {}).get("role_name") or resource
+                (a.get("snapshot") or {}).get("role_name")
+                or (a.get("evidence") or {}).get("role_name")
+                or resource
             )
             try:
                 caller = session.client("sts").get_caller_identity()
@@ -1069,43 +1082,65 @@ def apply_one(
             try:
                 role = iam.get_role(RoleName=role_name)["Role"]
             except ClientError as e:
+                code = e.response.get("Error", {}).get("Code", "")
+                msg = e.response.get("Error", {}).get("Message", str(e))
                 if _is_missing_entity(e):
-                    # Wrong account vs deleted role — never mark applied for live AWS.
-                    # Scan found this role; if GetRole fails, Apply session is wrong.
                     raise RuntimeError(
-                        f"IAM GetRole NoSuchEntity for '{role_name}' under caller "
-                        f"account={caller.get('Account')} arn={caller.get('Arn')}. "
-                        "Apply must use the same AssumeRole session as the scan "
-                        "(Settings: Access Key + Secret + Role ARN). "
-                        "Re-save Settings on Vercel (storage is ephemeral), then "
-                        "PLAN ALL → APPLY FIXES again. Detail: "
-                        f"{e.response.get('Error', {}).get('Message', e)}"
+                        f"IAM GetRole failed for '{role_name}' "
+                        f"(code={code}) under caller account={caller.get('Account')} "
+                        f"arn={caller.get('Arn')}. "
+                        "Apply must AssumeRole into the same Role ARN used for scan. "
+                        "Re-save Settings (Access Key + Secret + Role ARN), Test Connection, "
+                        f"re-scan, then apply again. AWS: {msg}"
                     ) from e
-                raise
+                raise RuntimeError(
+                    f"IAM GetRole failed for '{role_name}': {code} {msg}. "
+                    f"Caller={caller.get('Arn')}"
+                ) from e
             doc = role.get("AssumeRolePolicyDocument") or {}
             if isinstance(doc, str):
-                doc = json.loads(doc)
-            if not a.get("snapshot") or not a["snapshot"].get("assume_role_policy"):
-                a["snapshot"] = a.get("snapshot") or {}
-                a["snapshot"]["assume_role_policy"] = doc
-                a["snapshot"]["role_name"] = role_name
-            account_id = (
-                (a.get("snapshot") or {}).get("account_id")
+                try:
+                    from urllib.parse import unquote
+
+                    doc = json.loads(unquote(doc))
+                except json.JSONDecodeError:
+                    doc = json.loads(doc)
+            if not isinstance(doc, dict):
+                doc = {"Version": "2012-10-17", "Statement": []}
+            a["snapshot"] = a.get("snapshot") or {}
+            a["snapshot"]["assume_role_policy"] = doc
+            a["snapshot"]["role_name"] = role_name
+            a["snapshot"]["account_id"] = caller.get("Account")
+            account_id = str(
+                a["snapshot"].get("account_id")
                 or caller.get("Account")
                 or session.client("sts").get_caller_identity()["Account"]
             )
             tight = _tighten_trust_policy(
-                doc, account_id=str(account_id), role_name=role_name
+                doc, account_id=account_id, role_name=role_name
             )
-            iam.update_assume_role_policy(
-                RoleName=role_name,
-                PolicyDocument=json.dumps(tight),
-            )
+            policy_json = json.dumps(tight)
+            try:
+                iam.update_assume_role_policy(
+                    RoleName=role_name,
+                    PolicyDocument=policy_json,
+                )
+            except ClientError as e:
+                code = e.response.get("Error", {}).get("Code", "")
+                msg = e.response.get("Error", {}).get("Message", str(e))
+                raise RuntimeError(
+                    f"iam:UpdateAssumeRolePolicy denied/failed on '{role_name}' "
+                    f"(code={code}). Caller={caller.get('Arn')}. "
+                    "The assumed role needs iam:UpdateAssumeRolePolicy "
+                    "(lab admin roles usually have this). AWS: "
+                    f"{msg}"
+                ) from e
             a["preview"] = (
-                f"Updated trust policy on {role_name}: removed Principal * "
-                f"(now ec2.amazonaws.com or account root) "
-                f"[account={account_id}]"
+                f"LIVE AWS: updated trust policy on {role_name} — removed Principal * "
+                f"(now ec2.amazonaws.com or account root) [account={account_id}]"
             )
+            a["status"] = "applied"
+            a["error"] = None
         elif rid == "KMS-PUBLIC-POLICY":
             kms = session.client("kms", region_name=region)
             key_id = (

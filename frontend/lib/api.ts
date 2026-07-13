@@ -159,6 +159,55 @@ export interface ConnectionSettingsUpdate {
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
 
+/** Browser-session copy of AWS secrets so Apply works after Vercel cold starts. */
+const CREDS_KEY = "vaultscan_aws_creds_v1";
+
+export type StoredAwsCreds = {
+  access_key_id?: string;
+  secret_access_key?: string;
+  session_token?: string;
+  role_arn?: string;
+  auth_mode?: ScanMode;
+  region?: string;
+  external_id?: string;
+};
+
+export function rememberAwsCreds(partial: StoredAwsCreds) {
+  if (typeof window === "undefined") return;
+  try {
+    const prev = loadAwsCreds() || {};
+    const next: StoredAwsCreds = { ...prev };
+    for (const [k, v] of Object.entries(partial)) {
+      if (v !== undefined && v !== null && String(v).trim() !== "") {
+        (next as Record<string, string>)[k] = String(v).trim();
+      }
+    }
+    sessionStorage.setItem(CREDS_KEY, JSON.stringify(next));
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
+export function loadAwsCreds(): StoredAwsCreds | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = sessionStorage.getItem(CREDS_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw) as StoredAwsCreds;
+  } catch {
+    return null;
+  }
+}
+
+export function clearAwsCreds() {
+  if (typeof window === "undefined") return;
+  try {
+    sessionStorage.removeItem(CREDS_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
@@ -445,6 +494,7 @@ export function testConnectionSettings() {
 }
 
 export function clearConnectionCredentials() {
+  clearAwsCreds();
   return request<{
     ok: boolean;
     message: string;
@@ -539,6 +589,7 @@ export function applyRemediation(body: {
   allow_write_with_scan_creds?: boolean;
   rescan?: boolean;
 }) {
+  const creds = loadAwsCreds() || {};
   return request<{
     ok: boolean;
     job: RemediateJob;
@@ -554,6 +605,14 @@ export function applyRemediation(body: {
       only_safe: body.only_safe ?? false,
       allow_write_with_scan_creds: body.allow_write_with_scan_creds ?? false,
       rescan: body.rescan ?? true,
+      // Re-send secrets so real AWS Apply works after Vercel cold start
+      access_key_id: creds.access_key_id || undefined,
+      secret_access_key: creds.secret_access_key || undefined,
+      session_token: creds.session_token || undefined,
+      role_arn: creds.role_arn || undefined,
+      auth_mode: creds.auth_mode || undefined,
+      region: creds.region || undefined,
+      external_id: creds.external_id || undefined,
     }),
   });
 }

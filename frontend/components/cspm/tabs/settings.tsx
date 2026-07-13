@@ -22,6 +22,8 @@ import {
   saveConnectionSettings,
   testConnectionSettings,
   clearConnectionCredentials,
+  rememberAwsCreds,
+  clearAwsCreds,
   type ConnectionSettings,
   type CloudProvider,
   type ScanMode,
@@ -258,7 +260,18 @@ export function SettingsTab() {
     setSaving(true);
     setBanner(null);
     try {
-      const res = await saveConnectionSettings(payload());
+      const p = payload();
+      // Keep secrets in sessionStorage so Fixing options can re-hydrate on Vercel
+      rememberAwsCreds({
+        access_key_id: p.access_key_id,
+        secret_access_key: p.secret_access_key,
+        session_token: p.session_token,
+        role_arn: p.role_arn,
+        auth_mode: p.auth_mode,
+        region: p.region,
+        external_id: p.external_id,
+      });
+      const res = await saveConnectionSettings(p);
       setSettings(res.connection);
       setMode(res.connection.auth_mode);
       setRoleArn(res.connection.role_arn);
@@ -284,7 +297,17 @@ export function SettingsTab() {
     setTesting(true);
     setBanner(null);
     try {
-      await saveConnectionSettings(payload());
+      const p = payload();
+      rememberAwsCreds({
+        access_key_id: p.access_key_id,
+        secret_access_key: p.secret_access_key,
+        session_token: p.session_token,
+        role_arn: p.role_arn,
+        auth_mode: p.auth_mode,
+        region: p.region,
+        external_id: p.external_id,
+      });
+      await saveConnectionSettings(p);
       const res = await testConnectionSettings();
       setSettings(res.settings);
       setAccessKeyId("");
