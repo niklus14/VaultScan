@@ -1,30 +1,17 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { motion, useMotionValue, useSpring, useInView } from "motion/react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import {
-  Radar,
-  FileText,
-  Cloud,
-  Lock,
-  Sparkles,
-  ArrowRight,
-  CheckCircle2,
-  AlertTriangle,
-  DollarSign,
-  Target,
-  GitBranch,
-  ScanSearch,
-  KeyRound,
-  Menu,
-  X,
-  Activity,
-  Eye,
-  Zap,
-} from "lucide-react";
+  motion,
+  AnimatePresence,
+  useInView,
+  useMotionValue,
+  useSpring,
+} from "motion/react";
+import { Menu, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-/* ─── JARVIS-style palette (landing only) ─────────────────────────────────── */
+/* ─── JARVIS tokens ───────────────────────────────────────────────────────── */
 const C = {
   bg: "#050505",
   border: "#1e1e1e",
@@ -34,160 +21,214 @@ const C = {
   blue: "#2196f3",
   blueHot: "#42a5f5",
   green: "#22c55e",
-  red: "#ef4444",
   amber: "#f59e0b",
 };
 
+/** Hero rotating middle line — same pattern as JARVIS: ORCHESTRATE / REASON / PLAN / EXECUTE / ADAPT */
+const HERO_WORDS = ["SCAN", "DETECT", "EXPOSE", "PRIORITIZE", "PROVE"] as const;
+
 const NAV = [
-  { href: "#impact", label: "IMPACT" },
-  { href: "#why", label: "WHY US" },
-  { href: "#features", label: "CAPABILITIES" },
-  { href: "#pipeline", label: "PIPELINE" },
-  { href: "#coverage", label: "COVERAGE" },
-  { href: "#security", label: "TRUST" },
+  { href: "#features", label: "CAPABILITIES", n: "01" },
+  { href: "#impact", label: "IMPACT", n: "02" },
+  { href: "#pipeline", label: "PIPELINE", n: "03" },
+  { href: "#metrics", label: "METRICS", n: "04" },
+  { href: "#coverage", label: "COVERAGE", n: "05" },
+  { href: "#trust", label: "TRUST", n: "06" },
+  { href: "#why", label: "WHY US", n: "07" },
 ];
 
-const IMPACT_STATS = [
-  {
-    v: "$4.88M",
-    l: "Avg. global data breach cost",
-    s: "IBM Cost of a Data Breach Report — industry benchmark for total incident cost.",
-  },
-  {
-    v: "23%",
-    l: "Breaches involve cloud misconfig",
-    s: "Wrong-by-default storage, IAM, and network settings are a top breach vector.",
-  },
-  {
-    v: "200+",
-    l: "Days to identify & contain",
-    s: "Silent exposure compounds: public buckets and open ports often go unnoticed.",
-  },
-  {
-    v: "10×",
-    l: "Cost if found by attackers first",
-    s: "Proactive scanning is cheaper than incident response, legal, and brand recovery.",
-  },
+const MARQUEE = [
+  "PUBLIC S3 DETECTION",
+  "IAM LEAST-PRIVILEGE",
+  "ATTACK PATH MAPPING",
+  "CIS / NIST / GDPR",
+  "ASSUME ROLE SAFE",
+  "PDF · WORD EXPORTS",
+  "CLOUD ASSISTANT",
+  "ZERO WRITE ACCESS",
 ];
 
-const MONEY_PATHS = [
-  {
-    icon: Cloud,
-    title: "Public cloud storage",
-    body: "A single open S3 bucket can leak customer PII, backups, and API keys overnight — regulatory fines (GDPR, CCPA) plus class-action exposure.",
-    loss: "Fines · lawsuits · churn",
-  },
-  {
-    icon: KeyRound,
-    title: "Over-privileged IAM",
-    body: "Admin roles and wildcard trust policies turn one compromised identity into full account takeover — ransomware and resource hijacking.",
-    loss: "Ransomware · crypto-mining",
-  },
-  {
-    icon: Eye,
-    title: "Open admin ports",
-    body: "SSH/RDP to 0.0.0.0/0 + IMDSv1 is a classic path from internet scan → credential theft → lateral movement.",
-    loss: "Downtime · data exfil",
-  },
-  {
-    icon: AlertTriangle,
-    title: "Blind SOC / weak secrets",
-    body: "CloudTrail kill permissions and exposed secrets remove your flight recorder and hand attackers the keys to every integration.",
-    loss: "Undetected dwell time",
-  },
-];
-
-const WHY_US = [
+const CAPABILITIES = [
   {
     n: "01",
-    t: "Real AWS APIs — not checkbox theater",
-    d: "VaultScan reads live configuration (S3, IAM, EC2, KMS, SQS, Secrets…) and returns evidence you can verify in the console.",
+    tag: "DETECTION",
+    title: "MISCONFIG\nENGINE",
+    desc: "Deterministic rules across S3, IAM, EC2, RDS, KMS, SQS, and Secrets Manager. Evidence from live AWS APIs — not checkbox theater.",
+    metric: "10+",
+    metricLabel: "lab rule families",
   },
   {
     n: "02",
-    t: "Lab-proven detection (Steps 1–10)",
-    d: "Built against intentional misconfigs: public storage, admin roles, open ports, KMS/SQS exposure, privilege escalation, and more.",
+    tag: "NARRATIVE",
+    title: "ATTACK\nPATHS",
+    desc: "See how issues chain into breach outcomes — public storage, wildcard trust, privilege escalation, exposed messaging.",
+    metric: "KILL",
+    metricLabel: "chain storytelling",
   },
   {
     n: "03",
-    t: "Business language + engineer fixes",
-    d: "Posture score and compliance coverage for managers; CLI remediations and attack paths for security engineers.",
+    tag: "ASSISTANT",
+    title: "CLOUD\nASSISTANT",
+    desc: "Ask questions on your last scan. Plain-language risk for managers, CLI fixes for engineers — grounded in findings.",
+    metric: "AI",
+    metricLabel: "scan-aware replies",
   },
   {
     n: "04",
-    t: "Least privilege by design",
-    d: "AssumeRole + read-only patterns. We never need write access to your production workloads.",
-  },
-  {
-    n: "05",
-    t: "Board-ready exports",
-    d: "One-click PDF / Word packages with severity charts, findings tables, and executive narrative via Cloud Assistant.",
-  },
-  {
-    n: "06",
-    t: "From demo to production in minutes",
-    d: "Start in Demo mode with zero credentials, then connect real AWS when you’re ready — same console.",
+    tag: "EVIDENCE",
+    title: "BOARD\nREPORTS",
+    desc: "Executive brief, severity charts, findings tables. Export PDF & Word in one click for auditors and leadership.",
+    metric: "PDF",
+    metricLabel: "+ Word packages",
   },
 ];
 
-const FEATURES = [
+const IMPACT = [
   {
-    icon: ScanSearch,
-    title: "Misconfiguration engine",
-    body: "Deterministic rules across S3, IAM, EC2/SG, RDS, KMS, SQS, Secrets Manager — severity-scored with compliance tags.",
+    v: "$4.88M",
+    l: "AVG BREACH COST",
+    d: "Industry benchmark total cost of a data breach — incident response, legal, downtime, and brand damage stack fast.",
   },
   {
-    icon: GitBranch,
-    title: "Attack path theater",
-    body: "See how issues chain into breach outcomes — public storage, trust-wildcard takeover, priv-esc, exposed queues.",
+    v: "23%+",
+    l: "CLOUD MISCONFIG",
+    d: "A large share of cloud breaches start with a wrong setting — public buckets, open ports, over-privileged roles.",
   },
   {
-    icon: Sparkles,
-    title: "Cloud Assistant",
-    body: "Ask questions on your last scan. Get plain-language risk and prioritized remediation grounded in findings.",
+    v: "200d",
+    l: "DWELL TIME",
+    d: "Silent exposure often sits undetected for months. Attackers bill you long before the invoice shows up.",
   },
   {
-    icon: FileText,
-    title: "Evidence packages",
-    body: "Executive brief, metrics, and findings table — export for auditors, customers, and the board.",
+    v: "10×",
+    l: "COST IF LATE",
+    d: "Finding it yourself is cheap. Finding it via ransomware, fines, or customer loss is not.",
+  },
+];
+
+const MONEY = [
+  {
+    tag: "STORAGE",
+    t: "Public cloud data",
+    d: "Open S3 policies leak PII and backups — GDPR/CCPA fines plus class-action exposure.",
   },
   {
-    icon: Target,
-    title: "Compliance map",
-    body: "Findings mapped to CIS AWS, NIST SP 800-53, and GDPR security controls — coverage you can explain.",
+    tag: "IDENTITY",
+    t: "Admin IAM & trust *",
+    d: "One stolen key + AdministratorAccess = full account takeover and crypto-mining bills.",
   },
   {
-    icon: Lock,
-    title: "Safe connection model",
-    body: "IAM keys or AssumeRole; secrets stay server-side; Demo mode for training without live risk.",
+    tag: "NETWORK",
+    t: "World-open admin ports",
+    d: "SSH/RDP to 0.0.0.0/0 invites brute force; IMDSv1 turns SSRF into role theft.",
+  },
+  {
+    tag: "SECRETS",
+    t: "Blind SOC & loose secrets",
+    d: "CloudTrail kill rights and broad secret policies erase your flight recorder.",
   },
 ];
 
 const STEPS = [
-  { n: "01", t: "CONNECT", d: "Link AWS with AssumeRole or direct read keys — or use Demo." },
-  { n: "02", t: "SCAN", d: "Inventory configuration and evaluate the full rule pack." },
-  { n: "03", t: "PRIORITIZE", d: "Posture score, criticals, compliance, and attack paths." },
-  { n: "04", t: "PROVE", d: "Export PDF/Word, remediate, re-scan, watch the trend climb." },
+  {
+    n: "01",
+    tag: "CONNECT",
+    t: "LINK THE CLOUD",
+    d: "AssumeRole or read-only keys — or Demo mode with zero credentials.",
+    code: `// Settings → Cloud Connection
+auth_mode: "assume_role"
+role_arn: "arn:aws:iam::…:role/ReadOnly"
+// VaultScan never needs write access`,
+  },
+  {
+    n: "02",
+    tag: "SCAN",
+    t: "RUN THE ENGINE",
+    d: "Inventory configs and evaluate the full misconfiguration pack (lab Steps 1–10).",
+    code: `POST /api/scan
+→ S3 · IAM · EC2 · KMS · SQS · Secrets
+→ findings[] + attack_paths[]
+→ posture score 0–100`,
+  },
+  {
+    n: "03",
+    tag: "PROVE",
+    t: "EXPORT & FIX",
+    d: "Prioritize criticals, follow remediations, export PDF/Word, re-scan the trend.",
+    code: `GET /api/report/export/pdf
+// Board package with charts
+// + Cloud Assistant narrative`,
+  },
 ];
 
 const COVERAGE = [
-  { svc: "S3", items: "Public ACL/policy, BPA, encryption, versioning" },
-  { svc: "IAM", items: "Admin policies, MFA, trust *, CloudTrail kill, priv-esc" },
-  { svc: "EC2", items: "0.0.0.0/0 ports, IMDSv1, unencrypted EBS" },
-  { svc: "KMS", items: "Key policy Principal * on customer CMKs" },
-  { svc: "SQS", items: "Public queue resource policies" },
-  { svc: "Secrets", items: "Public or root-broad resource policies" },
-  { svc: "RDS", items: "Public instances, encryption, backups" },
-  { svc: "Paths", items: "Multi-step kill chains for board storytelling" },
+  ["S3", "Public ACL/policy · BPA · encryption · versioning"],
+  ["IAM", "Admin · MFA · trust * · CloudTrail kill · priv-esc"],
+  ["EC2", "0.0.0.0/0 ports · IMDSv1 · EBS encryption"],
+  ["KMS", "CMK policy Principal *"],
+  ["SQS", "Public queue resource policies"],
+  ["SECRETS", "Public / root-broad resource policies"],
+  ["RDS", "Public DB · encryption · backups"],
+  ["PATHS", "Multi-step kill chains for stakeholders"],
 ];
+
+const WHY = [
+  {
+    n: "01",
+    t: "Real APIs, real evidence",
+    d: "Every finding ties back to live cloud configuration you can open in the AWS console.",
+  },
+  {
+    n: "02",
+    t: "Lab-proven rules (1–10)",
+    d: "Built against intentional misconfigs so you can validate detection before production.",
+  },
+  {
+    n: "03",
+    t: "Two audiences, one console",
+    d: "Posture & compliance for managers. Attack paths & CLI fixes for engineers.",
+  },
+  {
+    n: "04",
+    t: "Least privilege always",
+    d: "AssumeRole + read-only. Demo mode when you cannot touch live accounts yet.",
+  },
+];
+
+const TRUST = [
+  {
+    n: "01",
+    tag: "ACCESS",
+    t: "READ-ONLY BY DEFAULT",
+    d: "Scanning never mutates resources. Connect with short-lived role credentials.",
+  },
+  {
+    n: "02",
+    tag: "SECRETS",
+    t: "SERVER-SIDE ONLY",
+    d: "Keys stay on the API host — never embedded in the browser bundle.",
+  },
+  {
+    n: "03",
+    tag: "MAP",
+    t: "COMPLIANCE TAGS",
+    d: "Findings mapped to CIS AWS, NIST SP 800-53, and GDPR security controls.",
+  },
+  {
+    n: "04",
+    tag: "DEMO",
+    t: "SAFE TRAINING MODE",
+    d: "Full UI and reports without live cloud risk for workshops and demos.",
+  },
+];
+
+/* ─── hooks / primitives ──────────────────────────────────────────────────── */
 
 function useUtcClock() {
   const [t, setT] = useState("");
   useEffect(() => {
     const tick = () =>
-      setT(
-        new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC",
-      );
+      setT(new Date().toISOString().replace("T", " ").slice(0, 19) + "Z");
     tick();
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
@@ -195,21 +236,83 @@ function useUtcClock() {
   return t;
 }
 
-/** Particle / network canvas — JARVIS-style right-side hero motion */
+function Fade({
+  children,
+  className,
+  delay = 0,
+}: {
+  children: React.ReactNode;
+  className?: string;
+  delay?: number;
+}) {
+  const ref = useRef(null);
+  const inView = useInView(ref, { once: true, margin: "-60px" });
+  return (
+    <motion.div
+      ref={ref}
+      className={className}
+      initial={{ opacity: 0, y: 32 }}
+      animate={inView ? { opacity: 1, y: 0 } : {}}
+      transition={{ duration: 0.65, delay, ease: [0.22, 1, 0.36, 1] }}
+    >
+      {children}
+    </motion.div>
+  );
+}
+
+function SysTag({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="mb-4 block font-mono text-[10px] tracking-[0.22em] text-[#2196f3]">
+      {children}
+    </span>
+  );
+}
+
+/** Giant rotating word — JARVIS hero middle line */
+function RotatingWord({ words }: { words: readonly string[] }) {
+  const [i, setI] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setI((v) => (v + 1) % words.length), 2200);
+    return () => clearInterval(id);
+  }, [words.length]);
+
+  return (
+    <div className="relative overflow-hidden h-[clamp(3.5rem,12vw,10rem)] leading-[0.88]">
+      <AnimatePresence mode="wait">
+        <motion.h1
+          key={words[i]}
+          className="font-display absolute inset-0 text-[clamp(3.5rem,12vw,10rem)] font-bold uppercase leading-[0.88] tracking-tight text-[#2196f3]"
+          style={{ fontFamily: "var(--font-space-grotesk), system-ui, sans-serif" }}
+          initial={{ y: "110%", opacity: 0 }}
+          animate={{ y: "0%", opacity: 1 }}
+          exit={{ y: "-110%", opacity: 0 }}
+          transition={{ duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
+        >
+          {words[i]}
+        </motion.h1>
+      </AnimatePresence>
+      {/* reserve space so layout doesn't jump */}
+      <h1
+        className="invisible text-[clamp(3.5rem,12vw,10rem)] font-bold uppercase leading-[0.88]"
+        aria-hidden
+      >
+        {words.reduce((a, b) => (a.length >= b.length ? a : b))}
+      </h1>
+    </div>
+  );
+}
+
 function HeroCanvas() {
   const ref = useRef<HTMLCanvasElement>(null);
-
   useEffect(() => {
     const canvas = ref.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-
     let raf = 0;
     let w = 0;
     let h = 0;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-
     type P = { x: number; y: number; vx: number; vy: number };
     let pts: P[] = [];
 
@@ -223,20 +326,26 @@ function HeroCanvas() {
       canvas.style.width = `${w}px`;
       canvas.style.height = `${h}px`;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      const n = Math.floor((w * h) / 14000);
-      pts = Array.from({ length: Math.max(28, Math.min(n, 70)) }, () => ({
+      const n = Math.floor((w * h) / 12000);
+      pts = Array.from({ length: Math.max(32, Math.min(n, 80)) }, () => ({
         x: Math.random() * w,
         y: Math.random() * h,
-        vx: (Math.random() - 0.5) * 0.45,
-        vy: (Math.random() - 0.5) * 0.45,
+        vx: (Math.random() - 0.5) * 0.4,
+        vy: (Math.random() - 0.5) * 0.4,
       }));
     };
 
     const draw = () => {
       ctx.clearRect(0, 0, w, h);
-      // soft blue bloom
-      const g = ctx.createRadialGradient(w * 0.7, h * 0.45, 0, w * 0.7, h * 0.45, w * 0.55);
-      g.addColorStop(0, "rgba(33,150,243,0.12)");
+      const g = ctx.createRadialGradient(
+        w * 0.72,
+        h * 0.42,
+        0,
+        w * 0.72,
+        h * 0.42,
+        w * 0.5,
+      );
+      g.addColorStop(0, "rgba(33,150,243,0.1)");
       g.addColorStop(1, "rgba(33,150,243,0)");
       ctx.fillStyle = g;
       ctx.fillRect(0, 0, w, h);
@@ -247,19 +356,14 @@ function HeroCanvas() {
         if (p.x < 0 || p.x > w) p.vx *= -1;
         if (p.y < 0 || p.y > h) p.vy *= -1;
       }
-
-      const link = Math.min(w, h) * 0.18;
+      const link = Math.min(w, h) * 0.16;
       for (let i = 0; i < pts.length; i++) {
         for (let j = i + 1; j < pts.length; j++) {
           const a = pts[i];
           const b = pts[j];
-          const dx = a.x - b.x;
-          const dy = a.y - b.y;
-          const d = Math.hypot(dx, dy);
+          const d = Math.hypot(a.x - b.x, a.y - b.y);
           if (d < link) {
-            const alpha = (1 - d / link) * 0.35;
-            ctx.strokeStyle = `rgba(33,150,243,${alpha})`;
-            ctx.lineWidth = 1;
+            ctx.strokeStyle = `rgba(33,150,243,${(1 - d / link) * 0.32})`;
             ctx.beginPath();
             ctx.moveTo(a.x, a.y);
             ctx.lineTo(b.x, b.y);
@@ -267,23 +371,19 @@ function HeroCanvas() {
           }
         }
       }
-
       for (const p of pts) {
-        ctx.fillStyle = "rgba(33,150,243,0.85)";
+        ctx.fillStyle = "rgba(33,150,243,0.9)";
         ctx.beginPath();
-        ctx.arc(p.x, p.y, 1.6, 0, Math.PI * 2);
+        ctx.arc(p.x, p.y, 1.5, 0, Math.PI * 2);
         ctx.fill();
       }
-
-      // scanning line
-      const t = (performance.now() / 40) % (h + 80);
-      const lg = ctx.createLinearGradient(0, t - 40, 0, t + 40);
+      const t = (performance.now() / 35) % (h + 60);
+      const lg = ctx.createLinearGradient(0, t - 30, 0, t + 30);
       lg.addColorStop(0, "rgba(33,150,243,0)");
-      lg.addColorStop(0.5, "rgba(33,150,243,0.18)");
+      lg.addColorStop(0.5, "rgba(33,150,243,0.15)");
       lg.addColorStop(1, "rgba(33,150,243,0)");
       ctx.fillStyle = lg;
-      ctx.fillRect(0, t - 40, w, 80);
-
+      ctx.fillRect(0, t - 30, w, 60);
       raf = requestAnimationFrame(draw);
     };
 
@@ -295,24 +395,24 @@ function HeroCanvas() {
       window.removeEventListener("resize", resize);
     };
   }, []);
-
   return <canvas ref={ref} className="h-full w-full" aria-hidden />;
 }
 
-function MagneticButton({
+function MagneticCta({
   children,
   onClick,
+  variant = "primary",
   className,
 }: {
   children: React.ReactNode;
   onClick?: () => void;
+  variant?: "primary" | "ghost";
   className?: string;
 }) {
   const x = useMotionValue(0);
   const y = useMotionValue(0);
-  const sx = useSpring(x, { stiffness: 220, damping: 16 });
-  const sy = useSpring(y, { stiffness: 220, damping: 16 });
-
+  const sx = useSpring(x, { stiffness: 240, damping: 18 });
+  const sy = useSpring(y, { stiffness: 240, damping: 18 });
   return (
     <motion.button
       type="button"
@@ -320,224 +420,189 @@ function MagneticButton({
       style={{ x: sx, y: sy }}
       onMouseMove={(e) => {
         const r = e.currentTarget.getBoundingClientRect();
-        x.set((e.clientX - r.left - r.width / 2) * 0.22);
-        y.set((e.clientY - r.top - r.height / 2) * 0.22);
+        x.set((e.clientX - r.left - r.width / 2) * 0.2);
+        y.set((e.clientY - r.top - r.height / 2) * 0.2);
       }}
       onMouseLeave={() => {
         x.set(0);
         y.set(0);
       }}
       whileTap={{ scale: 0.98 }}
-      className={className}
+      className={cn(
+        "group inline-flex items-center gap-6 whitespace-nowrap px-6 py-4 font-mono text-sm font-semibold tracking-widest transition-colors",
+        variant === "primary"
+          ? "bg-[#2196f3] text-[#050505] hover:bg-[#42a5f5]"
+          : "border border-[#1e1e1e] text-[#f2ede6] hover:border-[#2196f3]/40 hover:text-[#2196f3]",
+        className,
+      )}
     >
       {children}
     </motion.button>
   );
 }
 
-function FadeIn({
-  children,
-  className,
-  delay = 0,
-}: {
-  children: React.ReactNode;
-  className?: string;
-  delay?: number;
-}) {
+function CountUp({ to, suffix = "" }: { to: number; suffix?: string }) {
   const ref = useRef(null);
-  const inView = useInView(ref, { once: true, margin: "-80px" });
+  const inView = useInView(ref, { once: true });
+  const [v, setV] = useState(0);
+  useEffect(() => {
+    if (!inView) return;
+    const start = performance.now();
+    const dur = 1400;
+    let raf = 0;
+    const tick = (now: number) => {
+      const p = Math.min(1, (now - start) / dur);
+      const eased = 1 - Math.pow(1 - p, 3);
+      setV(Math.round(to * eased));
+      if (p < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [inView, to]);
   return (
-    <motion.div
-      ref={ref}
-      className={className}
-      initial={{ opacity: 0, y: 28 }}
-      animate={inView ? { opacity: 1, y: 0 } : {}}
-      transition={{ duration: 0.65, delay, ease: [0.22, 1, 0.36, 1] }}
-    >
-      {children}
-    </motion.div>
+    <span ref={ref}>
+      {v.toLocaleString()}
+      {suffix}
+    </span>
   );
 }
 
-function SectionLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <p
-      className="font-mono text-[10px] tracking-[0.22em]"
-      style={{ color: C.blue }}
-    >
-      {children}
-    </p>
-  );
-}
+/* ─── page ────────────────────────────────────────────────────────────────── */
 
 export function Landing({ onEnter }: { onEnter: () => void }) {
   const utc = useUtcClock();
-  const [menuOpen, setMenuOpen] = useState(false);
+  const [menu, setMenu] = useState(false);
   const [scrolled, setScrolled] = useState(false);
+  const [step, setStep] = useState(0);
 
   useEffect(() => {
-    const onScroll = () => setScrolled(window.scrollY > 12);
+    const onScroll = () => setScrolled(window.scrollY > 8);
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
+  useEffect(() => {
+    const id = setInterval(() => setStep((s) => (s + 1) % STEPS.length), 5000);
+    return () => clearInterval(id);
+  }, []);
+
+  const go = useCallback(() => {
+    setMenu(false);
+    onEnter();
+  }, [onEnter]);
+
   return (
-    <div
-      className="relative min-h-screen overflow-x-hidden antialiased"
-      style={{ background: C.bg, color: C.text }}
-    >
-      {/* Fixed header — dual bar like JARVIS */}
+    <div className="relative min-h-screen overflow-x-hidden bg-[#050505] text-[#f2ede6] antialiased">
+      {/* ── Header ───────────────────────────────────────────────────────── */}
       <header
         className={cn(
           "fixed inset-x-0 top-0 z-50 transition-all duration-300",
           scrolled ? "bg-[#050505]/95 backdrop-blur-md" : "bg-transparent",
         )}
       >
-        <div
-          className="flex h-8 items-center justify-between border-b px-6 lg:px-12"
-          style={{ borderColor: C.border }}
-        >
-          <span
-            className="font-mono text-[10px] uppercase tracking-widest"
-            style={{ color: C.dim }}
-          >
+        <div className="flex h-8 items-center justify-between border-b border-[#1e1e1e] px-6 lg:px-12">
+          <span className="font-mono text-[10px] uppercase tracking-widest text-[#3a3a3a]">
             SYS:VAULTSCAN-OS &nbsp;/&nbsp; BUILD 2026.07
           </span>
           <div className="hidden items-center gap-6 md:flex">
-            <span
-              className="font-mono text-[10px]"
-              style={{ color: C.dim }}
-            >
-              <span style={{ color: C.green }}>●</span>
+            <span className="font-mono text-[10px] text-[#3a3a3a]">
+              <span className="text-[#22c55e]">●</span>
               &nbsp;ALL_SYSTEMS_NOMINAL
             </span>
-            <span
-              className="font-mono text-[10px] tabular-nums"
-              style={{ color: C.dim }}
-            >
+            <span className="font-mono text-[10px] tabular-nums text-[#3a3a3a]">
               {utc}
             </span>
           </div>
         </div>
         <div className="flex h-14 items-center justify-between px-6 lg:px-12">
           <a href="#" className="group flex items-center gap-3">
-            <div
-              className="relative flex h-7 w-7 items-center justify-center border"
-              style={{ borderColor: C.blue }}
-            >
-              <div className="h-2 w-2" style={{ background: C.blue }} />
-              <div
-                className="absolute inset-0 opacity-10 transition group-hover:opacity-20"
-                style={{ background: C.blue }}
-              />
+            <div className="relative flex h-7 w-7 items-center justify-center border border-[#2196f3]">
+              <div className="h-2 w-2 bg-[#2196f3]" />
+              <div className="absolute inset-0 bg-[#2196f3]/10 transition-colors group-hover:bg-[#2196f3]/20" />
             </div>
             <span
-              className="text-2xl tracking-[0.15em]"
+              className="text-2xl tracking-[0.15em] text-[#f2ede6]"
               style={{ fontFamily: "var(--font-space-grotesk), system-ui" }}
             >
               VAULTSCAN
             </span>
-            <span
-              className="ml-1 hidden border-l pl-3 font-mono text-[10px] tracking-widest lg:block"
-              style={{ borderColor: C.border, color: C.dim }}
-            >
+            <span className="ml-1 hidden border-l border-[#1e1e1e] pl-3 font-mono text-[10px] tracking-widest text-[#3a3a3a] lg:block">
               CSPM
             </span>
           </a>
-
-          <nav className="hidden items-center gap-7 md:flex">
+          <nav className="hidden items-center gap-7 lg:flex">
             {NAV.map((n) => (
               <a
                 key={n.href}
                 href={n.href}
-                className="font-mono text-[11px] tracking-[0.18em] transition-colors duration-200 hover:text-[#2196f3]"
-                style={{ color: C.mute }}
+                className="font-mono text-[11px] tracking-[0.18em] text-[#5a5a5a] transition-colors duration-200 hover:text-[#2196f3]"
               >
                 {n.label}
               </a>
             ))}
           </nav>
-
           <div className="hidden items-center gap-4 md:flex">
             <button
               type="button"
-              onClick={onEnter}
-              className="font-mono text-[11px] tracking-widest transition-colors hover:text-[#f2ede6]"
-              style={{ color: C.mute }}
+              onClick={go}
+              className="font-mono text-[11px] tracking-widest text-[#5a5a5a] transition-colors hover:text-[#f2ede6]"
             >
               CONSOLE
             </button>
-            <MagneticButton
-              onClick={onEnter}
-              className="flex h-9 items-center px-5 font-mono text-[11px] font-semibold tracking-widest transition-colors"
-              style={{ background: C.blue, color: C.bg }}
+            <button
+              type="button"
+              onClick={go}
+              className="flex h-9 items-center bg-[#2196f3] px-5 font-mono text-[11px] font-semibold tracking-widest text-[#050505] transition-colors hover:bg-[#42a5f5]"
             >
               LAUNCH_SCAN →
-            </MagneticButton>
+            </button>
           </div>
-
           <button
             type="button"
-            className="p-1 md:hidden"
-            style={{ color: C.text }}
+            className="p-1 text-[#f2ede6] lg:hidden"
             aria-label="Menu"
-            onClick={() => setMenuOpen((v) => !v)}
+            onClick={() => setMenu((v) => !v)}
           >
-            {menuOpen ? <X className="size-5" /> : <Menu className="size-5" />}
+            {menu ? <X className="size-5" /> : <Menu className="size-5" />}
           </button>
         </div>
       </header>
 
-      {/* Mobile drawer */}
+      {/* Mobile */}
       <div
         className={cn(
-          "fixed inset-0 z-40 flex flex-col transition-opacity duration-300 md:hidden",
-          menuOpen
-            ? "pointer-events-auto opacity-100"
-            : "pointer-events-none opacity-0",
+          "fixed inset-0 z-40 flex flex-col bg-[#050505] transition-opacity duration-300 lg:hidden",
+          menu ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0",
         )}
-        style={{ background: C.bg, paddingTop: 88 }}
+        style={{ paddingTop: 88 }}
       >
-        <div className="flex flex-col border-t" style={{ borderColor: C.border }}>
-          {NAV.map((n, i) => (
+        <div className="flex flex-col border-t border-[#1e1e1e]">
+          {NAV.map((n) => (
             <a
               key={n.href}
               href={n.href}
-              onClick={() => setMenuOpen(false)}
-              className="flex items-center justify-between border-b px-8 py-7 text-4xl tracking-wider transition-colors hover:text-[#2196f3]"
-              style={{ borderColor: C.border, color: C.text }}
+              onClick={() => setMenu(false)}
+              className="flex items-center justify-between border-b border-[#1e1e1e] px-8 py-6 text-3xl tracking-wider text-[#f2ede6] transition-colors hover:text-[#2196f3]"
+              style={{ fontFamily: "var(--font-space-grotesk), system-ui" }}
             >
               {n.label}
-              <span className="font-mono text-xs" style={{ color: C.dim }}>
-                {String(i + 1).padStart(2, "0")}
-              </span>
+              <span className="font-mono text-xs text-[#3a3a3a]">{n.n}</span>
             </a>
           ))}
         </div>
-        <div className="mt-auto border-t p-8" style={{ borderColor: C.border }}>
+        <div className="mt-auto border-t border-[#1e1e1e] p-8">
           <button
             type="button"
-            onClick={() => {
-              setMenuOpen(false);
-              onEnter();
-            }}
-            className="block w-full py-5 text-center font-mono text-sm font-semibold tracking-widest"
-            style={{ background: C.blue, color: C.bg }}
+            onClick={go}
+            className="block w-full bg-[#2196f3] py-5 text-center font-mono text-sm font-semibold tracking-widest text-[#050505]"
           >
             LAUNCH_SCAN →
           </button>
         </div>
       </div>
 
-      {/* ─── HERO ─────────────────────────────────────────────────────────── */}
-      <section
-        className="relative flex min-h-screen flex-col justify-center overflow-hidden pt-[88px]"
-        style={{
-          backgroundImage:
-            "linear-gradient(rgba(30,30,30,0.45) 1px, transparent 1px), linear-gradient(90deg, rgba(30,30,30,0.45) 1px, transparent 1px)",
-          backgroundSize: "48px 48px",
-        }}
-      >
+      {/* ── HERO (JARVIS structure) ───────────────────────────────────────── */}
+      <section className="relative flex min-h-screen flex-col justify-center overflow-hidden pt-[88px] grid-bg-jarvis">
         <div className="pointer-events-none absolute inset-y-0 right-0 z-0 w-full lg:w-[55%]">
           <HeroCanvas />
         </div>
@@ -545,504 +610,646 @@ export function Landing({ onEnter }: { onEnter: () => void }) {
           className="pointer-events-none absolute inset-0 z-0"
           style={{
             background:
-              "radial-gradient(ellipse 50% 60% at 80% 50%, rgba(33,150,243,0.07) 0%, transparent 70%)",
+              "radial-gradient(ellipse 50% 60% at 80% 50%, rgba(33,150,243,0.06) 0%, transparent 70%)",
           }}
         />
 
-        <div className="relative z-20 mx-auto w-full max-w-[1400px] px-6 py-20 lg:px-12 lg:py-28">
-          <FadeIn delay={0.05}>
-            <div
-              className="mb-6 inline-flex items-center gap-2 border px-3 py-1.5 font-mono text-[10px] tracking-[0.2em]"
-              style={{ borderColor: C.border, color: C.mute }}
-            >
-              <span
-                className="size-1.5 animate-pulse rounded-full"
-                style={{ background: C.green }}
-              />
-              CLOUD SECURITY POSTURE · READ-ONLY · CIS MAPPED
-            </div>
-          </FadeIn>
+        <div className="relative z-20 mx-auto w-full max-w-[1400px] px-6 py-16 lg:px-12 lg:py-24">
+          <motion.div
+            initial={{ opacity: 0, y: 24 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
+          >
+            <p className="mb-4 font-mono text-[11px] tracking-[0.2em] text-[#2196f3]">
+              — VAULTSCAN v1.3 · CLOUD SECURITY POSTURE
+            </p>
 
-          <FadeIn delay={0.12}>
+            {/* Three-line hero with rotating middle — THE impact piece */}
             <h1
-              className="max-w-4xl text-4xl font-bold leading-[1.05] tracking-tight sm:text-6xl lg:text-7xl"
+              className="text-[clamp(3.5rem,12vw,10rem)] font-bold uppercase leading-[0.88] tracking-tight text-[#f2ede6]"
               style={{ fontFamily: "var(--font-space-grotesk), system-ui" }}
             >
-              Stop paying for
-              <br />
-              <span style={{ color: C.blue }}>cloud mistakes</span>
-              <br />
-              you can detect today.
+              CLOUDS THAT
             </h1>
-          </FadeIn>
-
-          <FadeIn delay={0.22}>
-            <p
-              className="mt-6 max-w-xl text-base leading-relaxed sm:text-lg"
-              style={{ color: C.mute }}
+            <RotatingWord words={HERO_WORDS} />
+            <h1
+              className="text-[clamp(3.5rem,12vw,10rem)] font-bold uppercase leading-[0.88] tracking-tight text-[#f2ede6]"
+              style={{ fontFamily: "var(--font-space-grotesk), system-ui" }}
             >
-              VaultScan finds the misconfigurations that empty bank accounts —
-              public storage, admin IAM, open ports, exposed keys — then shows
-              attack paths and ships board-ready reports before attackers bill
-              you in downtime and fines.
+              THEMSELVES
+            </h1>
+          </motion.div>
+
+          <motion.div
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.25, duration: 0.65 }}
+            className="mt-12 max-w-xl"
+          >
+            <p className="text-base leading-relaxed text-[#5a5a5a]">
+              Misconfigurations empty bank accounts — public storage, admin IAM,
+              open ports, exposed secrets. VaultScan detects them on real AWS
+              APIs, maps attack paths, and ships board-ready reports before
+              attackers (or auditors) do.
             </p>
-          </FadeIn>
-
-          <FadeIn delay={0.32}>
-            <div className="mt-10 flex flex-wrap items-center gap-4">
-              <MagneticButton
-                onClick={onEnter}
-                className="group relative flex h-12 items-center gap-2 overflow-hidden px-7 font-mono text-[12px] font-semibold tracking-[0.16em]"
-                style={{ background: C.blue, color: C.bg }}
+            <div className="mt-8 flex w-fit flex-col gap-3 sm:flex-row">
+              <MagneticCta onClick={go} variant="primary">
+                LAUNCH CONSOLE
+                <span className="transition-transform group-hover:translate-x-1">
+                  →
+                </span>
+              </MagneticCta>
+              <MagneticCta
+                onClick={() =>
+                  document.getElementById("impact")?.scrollIntoView({
+                    behavior: "smooth",
+                  })
+                }
+                variant="ghost"
               >
-                <span className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/25 to-transparent transition duration-700 group-hover:translate-x-full" />
-                <Radar className="size-4" />
-                ENTER_CONSOLE
-                <ArrowRight className="size-4 transition group-hover:translate-x-0.5" />
-              </MagneticButton>
-              <a
-                href="#impact"
-                className="flex h-12 items-center gap-2 border px-6 font-mono text-[12px] tracking-[0.14em] transition hover:border-[#2196f3] hover:text-[#2196f3]"
-                style={{ borderColor: C.border, color: C.mute }}
-              >
-                <DollarSign className="size-4" />
-                SEE_THE_COST
-              </a>
+                SEE THE COST
+                <span className="transition-transform group-hover:translate-x-1">
+                  →
+                </span>
+              </MagneticCta>
             </div>
-          </FadeIn>
+            <div className="mt-5 flex items-center gap-3">
+              <div className="flex -space-x-2">
+                {["#3b82f6", "#a855f7", "#ec4899", "#2196f3"].map((c) => (
+                  <div
+                    key={c}
+                    className="h-6 w-6 rounded-full border border-[#050505]"
+                    style={{ background: c }}
+                  />
+                ))}
+              </div>
+              <span className="font-mono text-[10px] text-[#3a3a3a]">
+                Built for validation labs · portfolio CSPM · real AWS scans
+              </span>
+            </div>
+          </motion.div>
+        </div>
 
-          <FadeIn delay={0.42}>
-            <ul className="mt-10 flex flex-wrap gap-x-6 gap-y-2 font-mono text-[10px] tracking-wider" style={{ color: C.dim }}>
-              {[
-                "ASSUME_ROLE",
-                "ZERO_WRITE",
-                "DEMO_MODE",
-                "PDF_WORD",
-                "ATTACK_PATHS",
-              ].map((t) => (
-                <li key={t} className="flex items-center gap-1.5">
-                  <CheckCircle2 className="size-3" style={{ color: C.green }} />
-                  {t}
-                </li>
+        {/* Bottom marquee */}
+        <div className="absolute bottom-0 left-0 right-0 border-t border-[#1e1e1e] py-5">
+          <div className="overflow-hidden">
+            <div className="vs-marquee flex whitespace-nowrap">
+              {[0, 1].map((copy) => (
+                <span key={copy} className="inline-flex items-center gap-16 px-8">
+                  {MARQUEE.map((m) => (
+                    <span
+                      key={`${copy}-${m}`}
+                      className="inline-flex items-center gap-3 font-mono text-[10px] tracking-[0.2em] text-[#3a3a3a]"
+                    >
+                      <span className="inline-block h-1 w-1 shrink-0 bg-[#2196f3]" />
+                      {m}
+                    </span>
+                  ))}
+                </span>
               ))}
-            </ul>
-          </FadeIn>
+            </div>
+          </div>
         </div>
       </section>
 
-      {/* ─── IMPACT / MONEY ───────────────────────────────────────────────── */}
-      <section
-        id="impact"
-        className="border-t py-24"
-        style={{ borderColor: C.border }}
-      >
-        <div className="mx-auto max-w-[1400px] px-6 lg:px-12">
-          <FadeIn>
-            <SectionLabel>// BUSINESS_IMPACT</SectionLabel>
-            <h2
-              className="mt-3 max-w-3xl text-3xl font-bold tracking-tight sm:text-4xl"
-              style={{ fontFamily: "var(--font-space-grotesk), system-ui" }}
-            >
-              Misconfigurations don’t just “fail audits.”
-              <span style={{ color: C.blue }}> They burn cash.</span>
-            </h2>
-            <p className="mt-4 max-w-2xl text-sm leading-relaxed sm:text-base" style={{ color: C.mute }}>
-              Most cloud breaches start with a setting left open — not a
-              zero-day. The bill shows up later as incident response, legal,
-              regulatory fines, customer churn, and months of SOC overtime.
-            </p>
-          </FadeIn>
-
-          <div className="mt-12 grid gap-px sm:grid-cols-2 lg:grid-cols-4" style={{ background: C.border }}>
-            {IMPACT_STATS.map((s, i) => (
-              <FadeIn key={s.l} delay={i * 0.06}>
-                <div className="h-full p-7" style={{ background: C.bg }}>
-                  <p
-                    className="font-mono text-3xl font-bold tracking-tight sm:text-4xl"
-                    style={{ color: C.blue }}
-                  >
-                    {s.v}
-                  </p>
-                  <p className="mt-2 font-mono text-[11px] font-semibold tracking-[0.14em]" style={{ color: C.text }}>
-                    {s.l.toUpperCase()}
-                  </p>
-                  <p className="mt-3 text-xs leading-relaxed" style={{ color: C.mute }}>
-                    {s.s}
-                  </p>
-                </div>
-              </FadeIn>
-            ))}
-          </div>
-
-          <div className="mt-16 grid gap-4 md:grid-cols-2">
-            {MONEY_PATHS.map((m, i) => (
-              <FadeIn key={m.title} delay={i * 0.07}>
-                <div
-                  className="group h-full border p-6 transition hover:border-[#2196f3]/50"
-                  style={{ borderColor: C.border, background: "#080808" }}
+      {/* ── CAPABILITIES (JARVIS row grid) ────────────────────────────────── */}
+      <section id="features" className="scroll-mt-[88px] border-t border-[#1e1e1e]">
+        <div className="mx-auto max-w-[1400px] px-0 lg:px-0">
+          <Fade className="grid grid-cols-[56px_1fr] border-b border-[#1e1e1e] lg:grid-cols-[56px_260px_1fr_160px]">
+            <div className="border-r border-[#1e1e1e] p-5" />
+            <div className="col-span-1 flex flex-col justify-between gap-4 p-6 lg:col-span-3 lg:flex-row lg:items-end">
+              <div>
+                <SysTag>CAPABILITIES</SysTag>
+                <h2
+                  className="text-5xl leading-[0.88] tracking-tight text-[#f2ede6] lg:text-7xl"
+                  style={{ fontFamily: "var(--font-space-grotesk), system-ui" }}
                 >
-                  <div className="mb-4 flex items-start justify-between gap-3">
-                    <div
-                      className="flex size-10 items-center justify-center border"
-                      style={{ borderColor: C.blue, color: C.blue }}
-                    >
-                      <m.icon className="size-5" />
-                    </div>
-                    <span
-                      className="font-mono text-[10px] tracking-widest"
-                      style={{ color: C.amber }}
-                    >
-                      {m.loss.toUpperCase()}
+                  WHAT VAULTSCAN
+                  <br />
+                  <span
+                    className="text-transparent"
+                    style={{ WebkitTextStroke: "1px #3a3a3a" }}
+                  >
+                    CAN DO
+                  </span>
+                </h2>
+              </div>
+              <p className="hidden max-w-[200px] text-right font-mono text-[10px] tracking-widest text-[#3a3a3a] lg:block">
+                FOUR CORE MODULES &nbsp;/&nbsp; LAB-PROVEN &nbsp;/&nbsp;
+                PRODUCTION-READY
+              </p>
+            </div>
+          </Fade>
+
+          {CAPABILITIES.map((c, i) => (
+            <Fade key={c.n} delay={i * 0.05}>
+              <div className="group border-b border-[#1e1e1e] transition-colors hover:bg-[#080808]">
+                <div className="grid grid-cols-[56px_1fr] gap-0 lg:grid-cols-[56px_260px_1fr_160px]">
+                  <div className="flex items-start border-r border-[#1e1e1e] p-5 pt-6">
+                    <span className="font-mono text-[10px] tracking-widest text-[#3a3a3a]">
+                      {c.n}
                     </span>
                   </div>
-                  <h3 className="text-lg font-semibold" style={{ color: C.text }}>
-                    {m.title}
-                  </h3>
-                  <p className="mt-2 text-sm leading-relaxed" style={{ color: C.mute }}>
-                    {m.body}
-                  </p>
-                </div>
-              </FadeIn>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* ─── WHY US ───────────────────────────────────────────────────────── */}
-      <section
-        id="why"
-        className="border-t py-24"
-        style={{ borderColor: C.border, background: "#070707" }}
-      >
-        <div className="mx-auto max-w-[1400px] px-6 lg:px-12">
-          <FadeIn>
-            <SectionLabel>// WHY_VAULTSCAN</SectionLabel>
-            <h2
-              className="mt-3 max-w-2xl text-3xl font-bold sm:text-4xl"
-              style={{ fontFamily: "var(--font-space-grotesk), system-ui" }}
-            >
-              Why teams choose us
-            </h2>
-            <p className="mt-3 max-w-xl text-sm" style={{ color: C.mute }}>
-              Built for portfolio-grade CSPM demos and real AWS validation labs —
-              clarity for executives, evidence for engineers.
-            </p>
-          </FadeIn>
-
-          <div className="mt-12 grid gap-0 border md:grid-cols-2 lg:grid-cols-3" style={{ borderColor: C.border }}>
-            {WHY_US.map((w, i) => (
-              <FadeIn key={w.n} delay={i * 0.05}>
-                <div
-                  className="h-full border-b border-r p-7 transition hover:bg-[#0a0a0a]"
-                  style={{ borderColor: C.border }}
-                >
-                  <span className="font-mono text-xs" style={{ color: C.blue }}>
-                    {w.n}
-                  </span>
-                  <h3 className="mt-3 text-base font-semibold" style={{ color: C.text }}>
-                    {w.t}
-                  </h3>
-                  <p className="mt-2 text-sm leading-relaxed" style={{ color: C.mute }}>
-                    {w.d}
-                  </p>
-                </div>
-              </FadeIn>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* ─── FEATURES ─────────────────────────────────────────────────────── */}
-      <section id="features" className="border-t py-24" style={{ borderColor: C.border }}>
-        <div className="mx-auto max-w-[1400px] px-6 lg:px-12">
-          <FadeIn>
-            <SectionLabel>// CAPABILITIES</SectionLabel>
-            <h2
-              className="mt-3 text-3xl font-bold sm:text-4xl"
-              style={{ fontFamily: "var(--font-space-grotesk), system-ui" }}
-            >
-              One console. Full posture story.
-            </h2>
-          </FadeIn>
-          <div className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {FEATURES.map((f, i) => (
-              <FadeIn key={f.title} delay={i * 0.06}>
-                <motion.div
-                  whileHover={{ y: -3 }}
-                  className="h-full border p-6"
-                  style={{ borderColor: C.border, background: "#080808" }}
-                >
-                  <div
-                    className="mb-4 flex size-10 items-center justify-center border"
-                    style={{ borderColor: `${C.blue}66`, color: C.blue }}
-                  >
-                    <f.icon className="size-5" />
+                  <div className="flex flex-col gap-3 border-r border-[#1e1e1e] p-6">
+                    <span className="font-mono text-[9px] tracking-[0.2em] text-[#2196f3]">
+                      {c.tag}
+                    </span>
+                    <h3
+                      className="whitespace-pre-line text-3xl leading-[0.9] text-[#f2ede6] transition-colors duration-300 group-hover:text-[#2196f3] lg:text-4xl"
+                      style={{
+                        fontFamily: "var(--font-space-grotesk), system-ui",
+                      }}
+                    >
+                      {c.title}
+                    </h3>
                   </div>
-                  <h3 className="font-semibold" style={{ color: C.text }}>
-                    {f.title}
-                  </h3>
-                  <p className="mt-2 text-sm leading-relaxed" style={{ color: C.mute }}>
-                    {f.body}
-                  </p>
-                </motion.div>
-              </FadeIn>
-            ))}
-          </div>
+                  <div className="border-r border-[#1e1e1e] p-6">
+                    <p className="max-w-xl text-sm leading-relaxed text-[#5a5a5a]">
+                      {c.desc}
+                    </p>
+                  </div>
+                  <div className="hidden flex-col justify-center p-6 lg:flex">
+                    <p className="font-mono text-2xl font-bold text-[#f2ede6]">
+                      {c.metric}
+                    </p>
+                    <p className="mt-1 font-mono text-[10px] tracking-widest text-[#3a3a3a]">
+                      {c.metricLabel.toUpperCase()}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </Fade>
+          ))}
         </div>
       </section>
 
-      {/* ─── PIPELINE ─────────────────────────────────────────────────────── */}
-      <section
-        id="pipeline"
-        className="border-t py-24"
-        style={{ borderColor: C.border, background: "#070707" }}
-      >
-        <div className="mx-auto max-w-[1400px] px-6 lg:px-12">
-          <FadeIn className="text-center">
-            <SectionLabel>// PIPELINE</SectionLabel>
-            <h2
-              className="mt-3 text-3xl font-bold sm:text-4xl"
-              style={{ fontFamily: "var(--font-space-grotesk), system-ui" }}
-            >
-              From connect to proof in four steps
-            </h2>
-          </FadeIn>
-          <div className="relative mt-14 grid gap-6 md:grid-cols-4">
-            <div
-              className="pointer-events-none absolute left-[12%] right-[12%] top-7 hidden h-px md:block"
-              style={{
-                background: `linear-gradient(90deg, transparent, ${C.blue}66, transparent)`,
-              }}
-            />
-            {STEPS.map((s, i) => (
-              <FadeIn key={s.n} delay={i * 0.1}>
-                <div
-                  className="relative border p-6 text-center"
-                  style={{ borderColor: C.border, background: C.bg }}
+      {/* ── IMPACT ───────────────────────────────────────────────────────── */}
+      <section id="impact" className="scroll-mt-[88px] border-t border-[#1e1e1e]">
+        <div className="mx-auto max-w-[1400px]">
+          <Fade className="grid grid-cols-[56px_1fr] border-b border-[#1e1e1e] lg:grid-cols-[56px_1fr]">
+            <div className="border-r border-[#1e1e1e] p-5" />
+            <div className="p-6 lg:p-10">
+              <SysTag>BUSINESS_IMPACT</SysTag>
+              <h2
+                className="max-w-3xl text-5xl leading-[0.9] tracking-tight lg:text-7xl"
+                style={{ fontFamily: "var(--font-space-grotesk), system-ui" }}
+              >
+                MISCONFIGS
+                <br />
+                <span
+                  className="text-transparent"
+                  style={{ WebkitTextStroke: "1px #3a3a3a" }}
                 >
-                  <motion.span
-                    className="mx-auto mb-4 flex size-14 items-center justify-center border font-mono text-sm font-bold"
-                    style={{ borderColor: C.blue, color: C.blue }}
-                    whileInView={{ scale: [0.85, 1.06, 1] }}
-                    viewport={{ once: true }}
-                    transition={{ delay: 0.1 + i * 0.08, duration: 0.45 }}
-                  >
-                    {s.n}
-                  </motion.span>
-                  <h3 className="font-mono text-sm tracking-[0.18em]" style={{ color: C.text }}>
-                    {s.t}
-                  </h3>
-                  <p className="mt-2 text-xs leading-relaxed" style={{ color: C.mute }}>
+                  BURN CASH
+                </span>
+              </h2>
+              <p className="mt-5 max-w-2xl text-sm leading-relaxed text-[#5a5a5a]">
+                Most cloud breaches start with a setting left open — not a
+                zero-day. The bill arrives as incident response, legal, fines,
+                churn, and months of SOC overtime.
+              </p>
+            </div>
+          </Fade>
+
+          <div className="grid border-b border-[#1e1e1e] sm:grid-cols-2 lg:grid-cols-4">
+            {IMPACT.map((s, i) => (
+              <Fade key={s.l} delay={i * 0.06}>
+                <div className="h-full border-b border-r border-[#1e1e1e] p-7 sm:border-b-0">
+                  <p className="font-mono text-4xl font-bold tracking-tight text-[#2196f3]">
+                    {s.v}
+                  </p>
+                  <p className="mt-2 font-mono text-[11px] font-semibold tracking-[0.16em] text-[#f2ede6]">
+                    {s.l}
+                  </p>
+                  <p className="mt-3 text-xs leading-relaxed text-[#5a5a5a]">
                     {s.d}
                   </p>
                 </div>
-              </FadeIn>
+              </Fade>
             ))}
           </div>
-        </div>
-      </section>
 
-      {/* ─── COVERAGE ─────────────────────────────────────────────────────── */}
-      <section id="coverage" className="border-t py-24" style={{ borderColor: C.border }}>
-        <div className="mx-auto max-w-[1400px] px-6 lg:px-12">
-          <FadeIn>
-            <SectionLabel>// DETECTION_SURFACE</SectionLabel>
-            <h2
-              className="mt-3 max-w-2xl text-3xl font-bold sm:text-4xl"
-              style={{ fontFamily: "var(--font-space-grotesk), system-ui" }}
-            >
-              What we actually check
-            </h2>
-            <p className="mt-3 max-w-xl text-sm" style={{ color: C.mute }}>
-              Validation-lab coverage including intentional high-risk patterns —
-              so you can prove the scanner before production rollout.
-            </p>
-          </FadeIn>
-          <div className="mt-10 grid gap-px sm:grid-cols-2 lg:grid-cols-4" style={{ background: C.border }}>
-            {COVERAGE.map((c, i) => (
-              <FadeIn key={c.svc} delay={i * 0.04}>
-                <div className="h-full p-5" style={{ background: C.bg }}>
-                  <p className="font-mono text-xs font-bold tracking-[0.2em]" style={{ color: C.blue }}>
-                    {c.svc}
-                  </p>
-                  <p className="mt-2 text-sm leading-relaxed" style={{ color: C.mute }}>
-                    {c.items}
+          <div className="grid md:grid-cols-2">
+            {MONEY.map((m, i) => (
+              <Fade key={m.t} delay={i * 0.05}>
+                <div className="group border-b border-r border-[#1e1e1e] p-8 transition-colors hover:bg-[#080808]">
+                  <span className="font-mono text-[9px] tracking-[0.22em] text-[#2196f3]">
+                    {m.tag}
+                  </span>
+                  <h3
+                    className="mt-3 text-2xl transition-colors group-hover:text-[#2196f3]"
+                    style={{ fontFamily: "var(--font-space-grotesk), system-ui" }}
+                  >
+                    {m.t}
+                  </h3>
+                  <p className="mt-2 text-sm leading-relaxed text-[#5a5a5a]">
+                    {m.d}
                   </p>
                 </div>
-              </FadeIn>
+              </Fade>
             ))}
           </div>
         </div>
       </section>
 
-      {/* ─── TRUST ────────────────────────────────────────────────────────── */}
-      <section
-        id="security"
-        className="border-t py-24"
-        style={{ borderColor: C.border, background: "#070707" }}
-      >
-        <div className="mx-auto grid max-w-[1400px] gap-12 px-6 lg:grid-cols-2 lg:px-12">
-          <FadeIn>
-            <SectionLabel>// TRUST_MODEL</SectionLabel>
-            <h2
-              className="mt-3 text-3xl font-bold sm:text-4xl"
-              style={{ fontFamily: "var(--font-space-grotesk), system-ui" }}
-            >
-              Security that respects your perimeter
-            </h2>
-            <ul className="mt-8 space-y-4">
-              {[
-                "Read-only scanning — no resource mutation from the engine",
-                "Prefer STS AssumeRole with short-lived credentials",
-                "Secrets stored server-side; never in the browser bundle",
-                "Demo mode for training without live cloud risk",
-                "Findings tagged to CIS / NIST / GDPR for stakeholder mapping",
-              ].map((t) => (
-                <li key={t} className="flex items-start gap-3 text-sm" style={{ color: C.mute }}>
-                  <CheckCircle2 className="mt-0.5 size-4 shrink-0" style={{ color: C.green }} />
-                  {t}
-                </li>
-              ))}
-            </ul>
-          </FadeIn>
-          <FadeIn delay={0.12}>
-            <div
-              className="border p-8"
-              style={{ borderColor: C.border, background: C.bg }}
-            >
-              <div className="mb-6 flex items-center gap-3">
-                <Activity className="size-5" style={{ color: C.blue }} />
-                <p className="font-mono text-[11px] tracking-[0.2em]" style={{ color: C.blue }}>
-                  LIVE_POSTURE_LOOP
-                </p>
-              </div>
-              {[
-                { t: "Connect", d: "Settings → cloud credentials" },
-                { t: "Scan", d: "Engine evaluates configs + lab rules" },
-                { t: "Explain", d: "Scores, compliance, attack paths" },
-                { t: "Export", d: "PDF / Word for leadership" },
-                { t: "Re-scan", d: "Prove remediation with trend" },
-              ].map((row, i) => (
-                <div
-                  key={row.t}
-                  className="flex items-center gap-4 border-b py-3 last:border-0"
-                  style={{ borderColor: C.border }}
+      {/* ── PIPELINE + code ──────────────────────────────────────────────── */}
+      <section id="pipeline" className="scroll-mt-[88px] border-t border-[#1e1e1e]">
+        <div className="mx-auto max-w-[1400px]">
+          <Fade className="grid grid-cols-[56px_1fr] border-b border-[#1e1e1e]">
+            <div className="border-r border-[#1e1e1e] p-5" />
+            <div className="p-6 lg:flex lg:items-end lg:justify-between lg:p-10">
+              <div>
+                <SysTag>PROCESS</SysTag>
+                <h2
+                  className="text-5xl leading-[0.88] tracking-tight lg:text-7xl"
+                  style={{ fontFamily: "var(--font-space-grotesk), system-ui" }}
                 >
-                  <span className="font-mono text-[10px]" style={{ color: C.dim }}>
-                    {String(i + 1).padStart(2, "0")}
+                  SHIP IN
+                  <br />
+                  <span
+                    className="text-transparent"
+                    style={{ WebkitTextStroke: "1px #3a3a3a" }}
+                  >
+                    THREE STEPS
                   </span>
-                  <span className="w-20 font-mono text-xs font-bold" style={{ color: C.text }}>
-                    {row.t}
-                  </span>
-                  <span className="text-xs" style={{ color: C.mute }}>
-                    {row.d}
-                  </span>
-                </div>
-              ))}
-              <MagneticButton
-                onClick={onEnter}
-                className="mt-8 flex w-full items-center justify-center gap-2 py-4 font-mono text-[12px] font-semibold tracking-widest"
-                style={{ background: C.blue, color: C.bg }}
-              >
-                OPEN_CONSOLE
-                <Zap className="size-4" />
-              </MagneticButton>
+                </h2>
+              </div>
+              <p className="mt-4 font-mono text-[10px] tracking-widest text-[#3a3a3a] lg:mt-0">
+                CONNECT &nbsp;·&nbsp; SCAN &nbsp;·&nbsp; PROVE
+              </p>
             </div>
-          </FadeIn>
+          </Fade>
+
+          <div className="grid lg:grid-cols-2">
+            <div className="border-r border-[#1e1e1e]">
+              {STEPS.map((s, i) => (
+                <button
+                  key={s.n}
+                  type="button"
+                  onClick={() => setStep(i)}
+                  className={cn(
+                    "flex w-full border-b border-[#1e1e1e] p-6 text-left transition-colors",
+                    step === i ? "bg-[#0a0a0a]" : "hover:bg-[#080808]",
+                  )}
+                >
+                  <div className="grid w-full grid-cols-[48px_1fr] gap-4">
+                    <span className="font-mono text-[10px] text-[#3a3a3a]">
+                      {s.n}
+                    </span>
+                    <div>
+                      <span className="font-mono text-[9px] tracking-[0.2em] text-[#2196f3]">
+                        {s.tag}
+                      </span>
+                      <h3
+                        className={cn(
+                          "mt-1 text-2xl transition-colors",
+                          step === i ? "text-[#2196f3]" : "text-[#f2ede6]",
+                        )}
+                        style={{
+                          fontFamily: "var(--font-space-grotesk), system-ui",
+                        }}
+                      >
+                        {s.t}
+                      </h3>
+                      <p className="mt-2 text-sm text-[#5a5a5a]">{s.d}</p>
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
+            <div className="bg-[#080808] p-6 lg:p-10">
+              <div className="mb-4 flex items-center justify-between">
+                <span className="font-mono text-[10px] tracking-widest text-[#3a3a3a]">
+                  STEP &nbsp;{String(step + 1).padStart(2, "0")}&nbsp;OF&nbsp;03
+                </span>
+                <span className="font-mono text-[10px] text-[#22c55e]">
+                  ● READY
+                </span>
+              </div>
+              <AnimatePresence mode="wait">
+                <motion.pre
+                  key={step}
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -8 }}
+                  transition={{ duration: 0.35 }}
+                  className="overflow-x-auto border border-[#1e1e1e] bg-[#050505] p-5 font-mono text-[11px] leading-relaxed text-[#5a5a5a]"
+                >
+                  {STEPS[step].code}
+                </motion.pre>
+              </AnimatePresence>
+              <MagneticCta onClick={go} variant="primary" className="mt-6 w-full justify-center sm:w-auto">
+                RUN THIS FLOW →
+              </MagneticCta>
+            </div>
+          </div>
         </div>
       </section>
 
-      {/* ─── CTA ──────────────────────────────────────────────────────────── */}
-      <section className="border-t py-24" style={{ borderColor: C.border }}>
-        <div className="mx-auto max-w-[1400px] px-6 lg:px-12">
-          <FadeIn>
-            <div
-              className="relative overflow-hidden border px-8 py-16 text-center sm:px-16"
-              style={{
-                borderColor: `${C.blue}55`,
-                background:
-                  "linear-gradient(135deg, rgba(33,150,243,0.12) 0%, #050505 45%, #050505 100%)",
-              }}
-            >
-              <motion.div
-                className="pointer-events-none absolute -right-16 -top-16 size-72 rounded-full blur-3xl"
-                style={{ background: "rgba(33,150,243,0.2)" }}
-                animate={{ opacity: [0.3, 0.55, 0.3] }}
-                transition={{ duration: 5, repeat: Infinity }}
-              />
-              <SectionLabel>// READY_STATE</SectionLabel>
+      {/* ── METRICS ──────────────────────────────────────────────────────── */}
+      <section id="metrics" className="scroll-mt-[88px] border-t border-[#1e1e1e]">
+        <div className="mx-auto max-w-[1400px]">
+          <Fade className="grid grid-cols-[56px_1fr] border-b border-[#1e1e1e]">
+            <div className="border-r border-[#1e1e1e] p-5" />
+            <div className="flex items-end justify-between p-6 lg:p-10">
+              <div>
+                <SysTag>LIVE METRICS</SysTag>
+                <h2
+                  className="text-5xl leading-[0.88] tracking-tight lg:text-7xl"
+                  style={{ fontFamily: "var(--font-space-grotesk), system-ui" }}
+                >
+                  SCALE YOU
+                  <br />
+                  <span
+                    className="text-transparent"
+                    style={{ WebkitTextStroke: "1px #3a3a3a" }}
+                  >
+                    CAN MEASURE
+                  </span>
+                </h2>
+              </div>
+              <span className="hidden items-center gap-2 font-mono text-[10px] text-[#22c55e] sm:flex">
+                <span className="size-1.5 animate-pulse rounded-full bg-[#22c55e]" />
+                LIVE
+              </span>
+            </div>
+          </Fade>
+          <div className="grid sm:grid-cols-2 lg:grid-cols-4">
+            {[
+              { n: 100, s: "/100", l: "POSTURE SCORE MODEL", d: "Starts perfect; severity penalties drop it" },
+              { n: 10, s: "+", l: "RULE FAMILIES", d: "S3 · IAM · EC2 · KMS · SQS · Secrets · more" },
+              { n: 3, s: "", l: "FRAMEWORK MAPS", d: "CIS AWS · NIST SP 800-53 · GDPR Art.32" },
+              { n: 0, s: "", l: "WRITE ACCESS", d: "Read-only scan model by design" },
+            ].map((m, i) => (
+              <Fade key={m.l} delay={i * 0.06}>
+                <div className="border-b border-r border-[#1e1e1e] p-8">
+                  <p className="font-mono text-4xl font-bold text-[#f2ede6] lg:text-5xl">
+                    <CountUp to={m.n} />
+                    {m.s}
+                  </p>
+                  <p className="mt-3 font-mono text-[10px] tracking-[0.18em] text-[#2196f3]">
+                    {m.l}
+                  </p>
+                  <p className="mt-2 text-xs text-[#5a5a5a]">{m.d}</p>
+                </div>
+              </Fade>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── COVERAGE ─────────────────────────────────────────────────────── */}
+      <section id="coverage" className="scroll-mt-[88px] border-t border-[#1e1e1e]">
+        <div className="mx-auto max-w-[1400px]">
+          <Fade className="grid grid-cols-[56px_1fr] border-b border-[#1e1e1e]">
+            <div className="border-r border-[#1e1e1e] p-5" />
+            <div className="p-6 lg:p-10">
+              <SysTag>DETECTION_SURFACE</SysTag>
               <h2
-                className="relative mt-4 text-3xl font-bold sm:text-5xl"
+                className="text-5xl leading-[0.88] tracking-tight lg:text-7xl"
                 style={{ fontFamily: "var(--font-space-grotesk), system-ui" }}
               >
-                Find open doors before
+                WHAT WE
                 <br />
-                they become invoices.
+                <span
+                  className="text-transparent"
+                  style={{ WebkitTextStroke: "1px #3a3a3a" }}
+                >
+                  ACTUALLY CHECK
+                </span>
               </h2>
-              <p className="relative mx-auto mt-4 max-w-lg text-sm" style={{ color: C.mute }}>
-                Launch the console, run Demo mode in seconds, or connect AWS and
-                generate your first posture report today.
-              </p>
-              <MagneticButton
-                onClick={onEnter}
-                className="relative mt-10 inline-flex items-center gap-2 px-10 py-4 font-mono text-[12px] font-semibold tracking-[0.18em]"
-                style={{ background: C.blue, color: C.bg }}
-              >
-                LAUNCH_VAULTSCAN →
-              </MagneticButton>
             </div>
-          </FadeIn>
+          </Fade>
+          {COVERAGE.map(([svc, items], i) => (
+            <Fade key={svc} delay={i * 0.03}>
+              <div className="group grid grid-cols-[56px_100px_1fr] border-b border-[#1e1e1e] transition-colors hover:bg-[#080808] sm:grid-cols-[56px_140px_1fr]">
+                <div className="flex items-center border-r border-[#1e1e1e] px-4 font-mono text-[10px] text-[#3a3a3a]">
+                  {String(i + 1).padStart(2, "0")}
+                </div>
+                <div className="flex items-center border-r border-[#1e1e1e] px-4 font-mono text-xs font-bold tracking-widest text-[#2196f3]">
+                  {svc}
+                </div>
+                <div className="px-5 py-4 text-sm text-[#5a5a5a] group-hover:text-[#f2ede6]">
+                  {items}
+                </div>
+              </div>
+            </Fade>
+          ))}
         </div>
       </section>
 
-      {/* ─── FOOTER ───────────────────────────────────────────────────────── */}
-      <footer className="border-t" style={{ borderColor: C.border }}>
+      {/* ── TRUST ────────────────────────────────────────────────────────── */}
+      <section id="trust" className="scroll-mt-[88px] border-t border-[#1e1e1e]">
+        <div className="mx-auto max-w-[1400px]">
+          <Fade className="grid grid-cols-[56px_1fr] border-b border-[#1e1e1e]">
+            <div className="border-r border-[#1e1e1e] p-5" />
+            <div className="p-6 lg:p-10">
+              <SysTag>TRUST & SECURITY</SysTag>
+              <h2
+                className="text-5xl leading-[0.88] tracking-tight lg:text-7xl"
+                style={{ fontFamily: "var(--font-space-grotesk), system-ui" }}
+              >
+                SCANS YOU
+                <br />
+                <span
+                  className="text-transparent"
+                  style={{ WebkitTextStroke: "1px #3a3a3a" }}
+                >
+                  CAN TRUST
+                </span>
+              </h2>
+              <div className="mt-6 flex flex-wrap gap-3 font-mono text-[10px] tracking-widest text-[#3a3a3a]">
+                {["READ_ONLY", "ASSUME_ROLE", "DEMO_MODE", "CIS_MAPPED", "PDF_EXPORT"].map(
+                  (b) => (
+                    <span key={b} className="border border-[#1e1e1e] px-3 py-1.5">
+                      {b}
+                    </span>
+                  ),
+                )}
+              </div>
+            </div>
+          </Fade>
+          <div className="grid md:grid-cols-2">
+            {TRUST.map((t, i) => (
+              <Fade key={t.n} delay={i * 0.05}>
+                <div className="group border-b border-r border-[#1e1e1e] p-8 transition-colors hover:bg-[#080808]">
+                  <div className="flex items-start gap-4">
+                    <span className="font-mono text-[10px] text-[#3a3a3a]">
+                      {t.n}
+                    </span>
+                    <div>
+                      <span className="font-mono text-[9px] tracking-[0.2em] text-[#2196f3]">
+                        {t.tag}
+                      </span>
+                      <h3
+                        className="mt-2 text-2xl group-hover:text-[#2196f3]"
+                        style={{
+                          fontFamily: "var(--font-space-grotesk), system-ui",
+                        }}
+                      >
+                        {t.t}
+                      </h3>
+                      <p className="mt-2 text-sm text-[#5a5a5a]">{t.d}</p>
+                    </div>
+                  </div>
+                </div>
+              </Fade>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── WHY US ───────────────────────────────────────────────────────── */}
+      <section id="why" className="scroll-mt-[88px] border-t border-[#1e1e1e]">
+        <div className="mx-auto max-w-[1400px]">
+          <Fade className="grid grid-cols-[56px_1fr] border-b border-[#1e1e1e]">
+            <div className="border-r border-[#1e1e1e] p-5" />
+            <div className="p-6 lg:p-10">
+              <SysTag>WHY_VAULTSCAN</SysTag>
+              <h2
+                className="text-5xl leading-[0.88] tracking-tight lg:text-7xl"
+                style={{ fontFamily: "var(--font-space-grotesk), system-ui" }}
+              >
+                WHY TEAMS
+                <br />
+                <span
+                  className="text-transparent"
+                  style={{ WebkitTextStroke: "1px #3a3a3a" }}
+                >
+                  CHOOSE US
+                </span>
+              </h2>
+            </div>
+          </Fade>
+          <div className="grid md:grid-cols-2">
+            {WHY.map((w, i) => (
+              <Fade key={w.n} delay={i * 0.05}>
+                <div className="border-b border-r border-[#1e1e1e] p-8">
+                  <span className="font-mono text-xs text-[#2196f3]">{w.n}</span>
+                  <h3
+                    className="mt-3 text-xl"
+                    style={{ fontFamily: "var(--font-space-grotesk), system-ui" }}
+                  >
+                    {w.t}
+                  </h3>
+                  <p className="mt-2 text-sm text-[#5a5a5a]">{w.d}</p>
+                </div>
+              </Fade>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── FINAL CTA ────────────────────────────────────────────────────── */}
+      <section className="border-t border-[#1e1e1e]">
+        <div className="mx-auto max-w-[1400px]">
+          <Fade className="grid grid-cols-[56px_1fr]">
+            <div className="border-r border-[#1e1e1e] p-5" />
+            <div className="relative overflow-hidden p-10 lg:p-16">
+              <motion.div
+                className="pointer-events-none absolute -right-20 -top-20 size-80 rounded-full bg-[#2196f3]/15 blur-3xl"
+                animate={{ opacity: [0.25, 0.5, 0.25] }}
+                transition={{ duration: 5, repeat: Infinity }}
+              />
+              <SysTag>VAULTSCAN RUNTIME · READY</SysTag>
+              <h2
+                className="relative max-w-3xl text-5xl leading-[0.9] tracking-tight lg:text-7xl"
+                style={{ fontFamily: "var(--font-space-grotesk), system-ui" }}
+              >
+                YOUR FIRST
+                <br />
+                SCAN
+                <br />
+                STARTS NOW.
+              </h2>
+              <p className="relative mt-6 max-w-lg text-sm text-[#5a5a5a]">
+                Open the console. Use Demo mode in seconds — or connect AWS and
+                generate a board-ready posture report today.
+              </p>
+              <div className="relative mt-10 flex flex-col gap-3 sm:flex-row">
+                <MagneticCta onClick={go} variant="primary">
+                  LAUNCH CONSOLE
+                  <span className="transition-transform group-hover:translate-x-1">
+                    →
+                  </span>
+                </MagneticCta>
+                <MagneticCta
+                  onClick={() =>
+                    document.getElementById("features")?.scrollIntoView({
+                      behavior: "smooth",
+                    })
+                  }
+                  variant="ghost"
+                >
+                  EXPLORE CAPABILITIES
+                  <span className="transition-transform group-hover:translate-x-1">
+                    →
+                  </span>
+                </MagneticCta>
+              </div>
+              <div className="relative mt-12 grid max-w-lg grid-cols-3 gap-6 border-t border-[#1e1e1e] pt-8">
+                {[
+                  { v: "10+", l: "rule families" },
+                  { v: "0", l: "write access" },
+                  { v: "CIS", l: "mapped" },
+                ].map((x) => (
+                  <div key={x.l}>
+                    <p className="font-mono text-2xl font-bold text-[#f2ede6]">
+                      {x.v}
+                    </p>
+                    <p className="font-mono text-[10px] tracking-widest text-[#3a3a3a]">
+                      {x.l.toUpperCase()}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </Fade>
+        </div>
+      </section>
+
+      {/* ── FOOTER ───────────────────────────────────────────────────────── */}
+      <footer className="border-t border-[#1e1e1e]">
         <div className="mx-auto max-w-[1400px] px-6 py-12 lg:px-12">
           <div className="grid gap-10 md:grid-cols-4">
             <div className="md:col-span-2">
               <div className="flex items-center gap-3">
-                <div
-                  className="flex h-7 w-7 items-center justify-center border"
-                  style={{ borderColor: C.blue }}
-                >
-                  <div className="h-2 w-2" style={{ background: C.blue }} />
+                <div className="flex h-7 w-7 items-center justify-center border border-[#2196f3]">
+                  <div className="h-2 w-2 bg-[#2196f3]" />
                 </div>
-                <span className="text-xl tracking-[0.15em]">VAULTSCAN</span>
+                <span
+                  className="text-xl tracking-[0.15em]"
+                  style={{ fontFamily: "var(--font-space-grotesk), system-ui" }}
+                >
+                  VAULTSCAN
+                </span>
               </div>
-              <p className="mt-4 max-w-sm text-xs leading-relaxed" style={{ color: C.dim }}>
-                Cloud Security Posture Management for teams that need evidence,
-                not buzzwords. Scan · prioritize · prove.
+              <p className="mt-4 max-w-sm text-xs leading-relaxed text-[#3a3a3a]">
+                Cloud Security Posture Management — scan, prioritize, prove.
+                Misconfigurations found before they become invoices.
               </p>
             </div>
             <div>
-              <h3 className="mb-4 font-mono text-[9px] tracking-[0.2em]" style={{ color: C.blue }}>
+              <h3 className="mb-4 font-mono text-[9px] tracking-[0.2em] text-[#2196f3]">
                 PRODUCT
               </h3>
-              <ul className="space-y-3 font-mono text-[11px]" style={{ color: C.dim }}>
-                <li>
-                  <a href="#features" className="hover:text-[#f2ede6]">
-                    Capabilities
-                  </a>
-                </li>
-                <li>
-                  <a href="#coverage" className="hover:text-[#f2ede6]">
-                    Coverage
-                  </a>
-                </li>
-                <li>
-                  <button type="button" onClick={onEnter} className="hover:text-[#f2ede6]">
-                    Open console
-                  </button>
-                </li>
+              <ul className="space-y-3 font-mono text-[11px] text-[#3a3a3a]">
+                {NAV.slice(0, 4).map((n) => (
+                  <li key={n.href}>
+                    <a href={n.href} className="hover:text-[#f2ede6]">
+                      {n.label}
+                    </a>
+                  </li>
+                ))}
               </ul>
             </div>
             <div>
-              <h3 className="mb-4 font-mono text-[9px] tracking-[0.2em]" style={{ color: C.blue }}>
+              <h3 className="mb-4 font-mono text-[9px] tracking-[0.2em] text-[#2196f3]">
                 TRUST
               </h3>
-              <ul className="space-y-3 font-mono text-[11px]" style={{ color: C.dim }}>
+              <ul className="space-y-3 font-mono text-[11px] text-[#3a3a3a]">
                 <li>
-                  <a href="#security" className="hover:text-[#f2ede6]">
+                  <a href="#trust" className="hover:text-[#f2ede6]">
                     Security model
                   </a>
                 </li>
@@ -1052,33 +1259,24 @@ export function Landing({ onEnter }: { onEnter: () => void }) {
                   </a>
                 </li>
                 <li>
-                  <a href="#why" className="hover:text-[#f2ede6]">
-                    Why VaultScan
-                  </a>
+                  <button type="button" onClick={go} className="hover:text-[#f2ede6]">
+                    Open console
+                  </button>
                 </li>
               </ul>
             </div>
           </div>
-          <div
-            className="mt-10 flex flex-col items-center justify-between gap-4 border-t pt-6 md:flex-row"
-            style={{ borderColor: C.border }}
-          >
-            <p className="font-mono text-[10px]" style={{ color: C.dim }}>
-              © 2026 VAULTSCAN · CLOUD SECURITY POSTURE MGMT · ALL RIGHTS RESERVED
+          <div className="mt-10 flex flex-col items-center justify-between gap-4 border-t border-[#1e1e1e] pt-6 md:flex-row">
+            <p className="font-mono text-[10px] text-[#3a3a3a]">
+              © 2026 VAULTSCAN · ALL RIGHTS RESERVED.
             </p>
-            <div className="flex items-center gap-4">
-              <span className="font-mono text-[10px] tabular-nums" style={{ color: C.dim }}>
+            <div className="flex items-center gap-6">
+              <span className="font-mono text-[10px] tabular-nums text-[#3a3a3a]">
                 {utc}
               </span>
               <div className="flex items-center gap-2">
-                <span
-                  className="inline-block size-1.5 animate-pulse rounded-full"
-                  style={{ background: C.green }}
-                />
-                <span
-                  className="font-mono text-[10px] tracking-widest"
-                  style={{ color: C.green }}
-                >
+                <span className="inline-block size-1.5 animate-pulse rounded-full bg-[#22c55e]" />
+                <span className="font-mono text-[10px] tracking-widest text-[#22c55e]">
                   ALL_SYSTEMS_OPERATIONAL
                 </span>
               </div>
@@ -1086,6 +1284,7 @@ export function Landing({ onEnter }: { onEnter: () => void }) {
           </div>
         </div>
       </footer>
+
     </div>
   );
 }

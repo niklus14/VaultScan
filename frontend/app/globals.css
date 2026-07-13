@@ -118,6 +118,21 @@
   82% { opacity: 1; transform: translateX(0) scale(1); }
   100% { opacity: 0; transform: translateX(8px) scale(0.96); }
 }
+
+/* JARVIS-style landing */
+.grid-bg-jarvis {
+  background-image:
+    linear-gradient(rgba(30, 30, 30, 0.5) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(30, 30, 30, 0.5) 1px, transparent 1px);
+  background-size: 48px 48px;
+}
+.vs-marquee {
+  animation: vs-marquee 40s linear infinite;
+}
+@keyframes vs-marquee {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
 /* Motion owns the Y-axis turn-around; keep face readable mid-flip */
 .cloud-robot-spin {
   transform-style: preserve-3d;
