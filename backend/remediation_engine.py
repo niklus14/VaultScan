@@ -144,9 +144,120 @@ class FixAction:
     region: str = "us-east-1"
     service: str = ""
     severity: str = "MEDIUM"
+    evidence: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+_ADMIN_POLICY_ARN = "arn:aws:iam::aws:policy/AdministratorAccess"
+_DANGEROUS_POLICY_HINTS = (
+    "admin",
+    "trail",
+    "leakage",
+    "leak",
+    "privesc",
+    "priv-esc",
+    "scanner",
+    "permissive",
+    "poweruser",
+    "fullaccess",
+)
+
+
+def _policy_name_wanted(action: dict[str, Any]) -> str:
+    """Best-effort policy name from snapshot / aws_calls / evidence / title."""
+    snap = action.get("snapshot") or {}
+    want = str(snap.get("policy_name") or "").strip()
+    if want:
+        return want
+    for c in action.get("aws_calls") or []:
+        want = str((c.get("params") or {}).get("policy_name") or "").strip()
+        if want:
+            return want
+    ev = action.get("evidence") or {}
+    want = str(ev.get("policy_name") or "").strip()
+    if want:
+        return want
+    # Fallback: pull from AI notes / title rarely contains the managed name
+    return ""
+
+
+def _list_attached_for_identity(
+    iam: Any, name: str
+) -> tuple[str, list[dict[str, Any]]]:
+    """
+    Resolve IAM user vs role and return (entity_type, attached_policies).
+    Tries user first (lab findings often target demo-scanner-user).
+    """
+    bare = _iam_role_name(name)
+    # Prefer user when name looks like a user or when user exists
+    try:
+        iam.get_user(UserName=bare)
+        pols = iam.list_attached_user_policies(UserName=bare).get(
+            "AttachedPolicies", []
+        )
+        return "user", list(pols or [])
+    except ClientError as e:
+        if not _is_missing_entity(e):
+            # AccessDenied etc. — still try role
+            pass
+    try:
+        iam.get_role(RoleName=bare)
+        pols = iam.list_attached_role_policies(RoleName=bare).get(
+            "AttachedPolicies", []
+        )
+        return "role", list(pols or [])
+    except ClientError as e:
+        if _is_missing_entity(e):
+            raise RuntimeError(
+                f"IAM identity '{bare}' not found as user or role under this "
+                "account/session. Re-save Settings (Access Key + Secret + Role ARN), "
+                "re-scan, then apply again."
+            ) from e
+        raise
+
+
+def _detach_attached_policies(
+    iam: Any,
+    name: str,
+    *,
+    match_names: list[str] | None = None,
+    match_arns: list[str] | None = None,
+    name_hints: tuple[str, ...] = (),
+    detach_all_customer: bool = False,
+) -> tuple[list[str], str]:
+    """
+    Detach matching managed policies from a user or role.
+    Returns (detached_policy_names, entity_type).
+    """
+    entity, attached = _list_attached_for_identity(iam, name)
+    bare = _iam_role_name(name)
+    match_names_l = {n.lower() for n in (match_names or []) if n}
+    match_arns_s = {a for a in (match_arns or []) if a}
+    hints = tuple(h.lower() for h in name_hints if h)
+    detached: list[str] = []
+
+    for pol in attached:
+        pname = pol.get("PolicyName") or ""
+        parn = pol.get("PolicyArn") or ""
+        hit = False
+        if match_arns_s and parn in match_arns_s:
+            hit = True
+        elif match_names_l and pname.lower() in match_names_l:
+            hit = True
+        elif hints and any(h in pname.lower() for h in hints):
+            hit = True
+        elif detach_all_customer and ":aws:policy/" not in parn:
+            hit = True
+        if not hit:
+            continue
+        if entity == "user":
+            iam.detach_user_policy(UserName=bare, PolicyArn=parn)
+        else:
+            iam.detach_role_policy(RoleName=bare, PolicyArn=parn)
+        detached.append(pname or parn)
+    return detached, entity
 
 
 def _load_jobs() -> dict[str, Any]:
@@ -465,6 +576,7 @@ def build_action_from_finding(finding: dict[str, Any]) -> FixAction:
         region=region,
         service=service,
         severity=severity,
+        evidence=dict(evidence) if isinstance(evidence, dict) else {},
     )
 
 
@@ -972,45 +1084,51 @@ def apply_one(
             )
         elif rid in ("IAM-ROLE-ADMIN", "IAM-ADMIN-POLICY"):
             iam = session.client("iam")
-            name = _iam_role_name(resource) if rid == "IAM-ROLE-ADMIN" else resource
-            try:
-                if rid == "IAM-ROLE-ADMIN":
-                    for pol in iam.list_attached_role_policies(RoleName=name).get(
-                        "AttachedPolicies", []
-                    ):
-                        if "AdministratorAccess" in (pol.get("PolicyName") or ""):
-                            iam.detach_role_policy(
-                                RoleName=name, PolicyArn=pol["PolicyArn"]
-                            )
-                else:
-                    detached = False
+            name = resource
+            detached, entity = _detach_attached_policies(
+                iam,
+                name,
+                match_names=["AdministratorAccess"],
+                match_arns=[_ADMIN_POLICY_ARN],
+                name_hints=("administratoraccess", "admin"),
+            )
+            if not detached:
+                # Try direct detach by AWS managed ARN (user then role)
+                bare = _iam_role_name(name)
+                for entity_try, detach_fn in (
+                    (
+                        "user",
+                        lambda: iam.detach_user_policy(
+                            UserName=bare, PolicyArn=_ADMIN_POLICY_ARN
+                        ),
+                    ),
+                    (
+                        "role",
+                        lambda: iam.detach_role_policy(
+                            RoleName=bare, PolicyArn=_ADMIN_POLICY_ARN
+                        ),
+                    ),
+                ):
                     try:
-                        for pol in iam.list_attached_user_policies(UserName=name).get(
-                            "AttachedPolicies", []
-                        ):
-                            if "AdministratorAccess" in (pol.get("PolicyName") or ""):
-                                iam.detach_user_policy(
-                                    UserName=name, PolicyArn=pol["PolicyArn"]
-                                )
-                                detached = True
-                    except ClientError:
-                        pass
-                    if not detached:
-                        rname = _iam_role_name(name)
-                        for pol in iam.list_attached_role_policies(RoleName=rname).get(
-                            "AttachedPolicies", []
-                        ):
-                            if "AdministratorAccess" in (pol.get("PolicyName") or ""):
-                                iam.detach_role_policy(
-                                    RoleName=rname, PolicyArn=pol["PolicyArn"]
-                                )
-            except ClientError as e:
-                if _is_missing_entity(e):
-                    a["preview"] = f"IAM entity {name} not found — already removed"
-                    a["status"] = "applied"
-                    a["error"] = None
-                    return a
-                raise
+                        detach_fn()
+                        detached = ["AdministratorAccess"]
+                        entity = entity_try
+                        break
+                    except ClientError as e:
+                        if _is_missing_entity(e):
+                            continue
+                        raise
+            if not detached:
+                raise RuntimeError(
+                    f"No AdministratorAccess attached to IAM {entity or 'identity'} "
+                    f"'{_iam_role_name(name)}' (already fixed or different policy name)."
+                )
+            a["preview"] = (
+                f"Detached {', '.join(detached)} from IAM {entity} "
+                f"{_iam_role_name(name)}"
+            )
+            a["status"] = "applied"
+            a["error"] = None
         elif rid in (
             "IAM-CLOUDTRAIL-DESTROY",
             "IAM-IMAGE-LEAK",
@@ -1018,54 +1136,39 @@ def apply_one(
         ):
             iam = session.client("iam")
             name = resource
-            want = (a.get("snapshot") or {}).get("policy_name") or ""
-            for c in a.get("aws_calls") or []:
-                want = c.get("params", {}).get("policy_name") or want
-            detached = False
-            missing = False
-            for list_fn, detach_fn, key in (
-                (
-                    lambda: iam.list_attached_user_policies(UserName=name),
-                    lambda arn: iam.detach_user_policy(UserName=name, PolicyArn=arn),
-                    "AttachedPolicies",
-                ),
-                (
-                    lambda: iam.list_attached_role_policies(
-                        RoleName=_iam_role_name(name)
-                    ),
-                    lambda arn: iam.detach_role_policy(
-                        RoleName=_iam_role_name(name), PolicyArn=arn
-                    ),
-                    "AttachedPolicies",
-                ),
-            ):
-                try:
-                    for pol in list_fn().get(key, []):
-                        pname = pol.get("PolicyName") or ""
-                        if want and want != pname:
-                            continue
-                        if want or any(
-                            x in pname.lower()
-                            for x in ("trail", "leakage", "privesc", "scanner")
-                        ):
-                            detach_fn(pol["PolicyArn"])
-                            detached = True
-                    if detached:
-                        break
-                except ClientError as e:
-                    if _is_missing_entity(e):
-                        missing = True
-                        continue
-                    continue
-            if missing and not detached:
-                a["preview"] = f"IAM entity {name} not found — already removed"
-                a["status"] = "applied"
-                a["error"] = None
-                return a
-            if not detached:
-                raise RuntimeError(
-                    "Could not find/detach matching managed policy — apply manually"
+            want = _policy_name_wanted(a)
+            detached, entity = _detach_attached_policies(
+                iam,
+                name,
+                match_names=[want] if want else None,
+                name_hints=_DANGEROUS_POLICY_HINTS if not want else (),
+                # If we know the exact policy name, only that; else also customer-managed
+                detach_all_customer=not bool(want),
+            )
+            if not detached and want:
+                # Second pass: keyword hints if exact name missed
+                detached, entity = _detach_attached_policies(
+                    iam,
+                    name,
+                    name_hints=_DANGEROUS_POLICY_HINTS,
+                    detach_all_customer=True,
                 )
+            if not detached:
+                entity2, attached = _list_attached_for_identity(iam, name)
+                names = [p.get("PolicyName") or p.get("PolicyArn") for p in attached]
+                raise RuntimeError(
+                    f"Could not find a dangerous managed policy to detach on IAM "
+                    f"{entity2} '{_iam_role_name(name)}'. "
+                    f"Wanted policy_name={want or '(any lab/customer)'}. "
+                    f"Currently attached: {names or '[]'}. "
+                    "Re-scan; if the finding is gone it is already fixed."
+                )
+            a["preview"] = (
+                f"Detached {', '.join(detached)} from IAM {entity} "
+                f"{_iam_role_name(name)} (rule {rid})"
+            )
+            a["status"] = "applied"
+            a["error"] = None
         elif rid == "IAM-TRUST-WILDCARD":
             # Live AWS: tighten trust policy with iam:UpdateAssumeRolePolicy
             # (NOT manual-only — that old path is removed).
@@ -1594,7 +1697,7 @@ def apply_job(
             act["error"] = "Not auto-applicable — copy the CLI hint and fix manually"
             results.append(act)
             continue
-        # Ensure aws_calls exist by rebuilding from rule if missing
+        # Ensure aws_calls + evidence exist by rebuilding from rule if missing
         if not act.get("aws_calls") and act.get("auto_applicable"):
             rebuilt = build_action_from_finding(
                 {
@@ -1606,10 +1709,18 @@ def apply_job(
                     "severity": act.get("severity"),
                     "service": act.get("service"),
                     "region": act.get("region"),
+                    "evidence": act.get("evidence") or {},
                 }
             )
             act["aws_calls"] = rebuilt.aws_calls
             act["auto_applicable"] = rebuilt.auto_applicable
+            if not act.get("evidence") and rebuilt.evidence:
+                act["evidence"] = rebuilt.evidence
+
+        # Clear stale errors from previous failed apply of an old job
+        if act.get("status") in ("failed", "skipped"):
+            act["error"] = None
+            act["status"] = "planned"
 
         results.append(apply_one(session, act, simulate=simulate, dry_run=False))
 
