@@ -1,9 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { motion, useMotionValue, useSpring, useTransform } from "motion/react";
+import { useEffect, useRef, useState } from "react";
+import { motion, useMotionValue, useSpring, useInView } from "motion/react";
 import {
-  Shield,
   Radar,
   FileText,
   Cloud,
@@ -11,146 +10,293 @@ import {
   Sparkles,
   ArrowRight,
   CheckCircle2,
+  AlertTriangle,
+  DollarSign,
+  Target,
+  GitBranch,
+  ScanSearch,
+  KeyRound,
+  Menu,
+  X,
   Activity,
-  Layers,
+  Eye,
+  Zap,
 } from "lucide-react";
-import {
-  MagneticCard,
-  RippleSurface,
-  SpotlightFrame,
-} from "@/components/cspm/interactive";
 import { cn } from "@/lib/utils";
+
+/* ─── JARVIS-style palette (landing only) ─────────────────────────────────── */
+const C = {
+  bg: "#050505",
+  border: "#1e1e1e",
+  text: "#f2ede6",
+  mute: "#5a5a5a",
+  dim: "#3a3a3a",
+  blue: "#2196f3",
+  blueHot: "#42a5f5",
+  green: "#22c55e",
+  red: "#ef4444",
+  amber: "#f59e0b",
+};
+
+const NAV = [
+  { href: "#impact", label: "IMPACT" },
+  { href: "#why", label: "WHY US" },
+  { href: "#features", label: "CAPABILITIES" },
+  { href: "#pipeline", label: "PIPELINE" },
+  { href: "#coverage", label: "COVERAGE" },
+  { href: "#security", label: "TRUST" },
+];
+
+const IMPACT_STATS = [
+  {
+    v: "$4.88M",
+    l: "Avg. global data breach cost",
+    s: "IBM Cost of a Data Breach Report — industry benchmark for total incident cost.",
+  },
+  {
+    v: "23%",
+    l: "Breaches involve cloud misconfig",
+    s: "Wrong-by-default storage, IAM, and network settings are a top breach vector.",
+  },
+  {
+    v: "200+",
+    l: "Days to identify & contain",
+    s: "Silent exposure compounds: public buckets and open ports often go unnoticed.",
+  },
+  {
+    v: "10×",
+    l: "Cost if found by attackers first",
+    s: "Proactive scanning is cheaper than incident response, legal, and brand recovery.",
+  },
+];
+
+const MONEY_PATHS = [
+  {
+    icon: Cloud,
+    title: "Public cloud storage",
+    body: "A single open S3 bucket can leak customer PII, backups, and API keys overnight — regulatory fines (GDPR, CCPA) plus class-action exposure.",
+    loss: "Fines · lawsuits · churn",
+  },
+  {
+    icon: KeyRound,
+    title: "Over-privileged IAM",
+    body: "Admin roles and wildcard trust policies turn one compromised identity into full account takeover — ransomware and resource hijacking.",
+    loss: "Ransomware · crypto-mining",
+  },
+  {
+    icon: Eye,
+    title: "Open admin ports",
+    body: "SSH/RDP to 0.0.0.0/0 + IMDSv1 is a classic path from internet scan → credential theft → lateral movement.",
+    loss: "Downtime · data exfil",
+  },
+  {
+    icon: AlertTriangle,
+    title: "Blind SOC / weak secrets",
+    body: "CloudTrail kill permissions and exposed secrets remove your flight recorder and hand attackers the keys to every integration.",
+    loss: "Undetected dwell time",
+  },
+];
+
+const WHY_US = [
+  {
+    n: "01",
+    t: "Real AWS APIs — not checkbox theater",
+    d: "VaultScan reads live configuration (S3, IAM, EC2, KMS, SQS, Secrets…) and returns evidence you can verify in the console.",
+  },
+  {
+    n: "02",
+    t: "Lab-proven detection (Steps 1–10)",
+    d: "Built against intentional misconfigs: public storage, admin roles, open ports, KMS/SQS exposure, privilege escalation, and more.",
+  },
+  {
+    n: "03",
+    t: "Business language + engineer fixes",
+    d: "Posture score and compliance coverage for managers; CLI remediations and attack paths for security engineers.",
+  },
+  {
+    n: "04",
+    t: "Least privilege by design",
+    d: "AssumeRole + read-only patterns. We never need write access to your production workloads.",
+  },
+  {
+    n: "05",
+    t: "Board-ready exports",
+    d: "One-click PDF / Word packages with severity charts, findings tables, and executive narrative via Cloud Assistant.",
+  },
+  {
+    n: "06",
+    t: "From demo to production in minutes",
+    d: "Start in Demo mode with zero credentials, then connect real AWS when you’re ready — same console.",
+  },
+];
 
 const FEATURES = [
   {
-    icon: Cloud,
-    title: "Multi-cloud connect",
-    body: "AWS AssumeRole and Google Cloud service accounts — industry-standard, revocable access.",
-    accent: "text-accent-blue",
-    ring: "border-accent-blue/30 bg-accent-blue/10",
+    icon: ScanSearch,
+    title: "Misconfiguration engine",
+    body: "Deterministic rules across S3, IAM, EC2/SG, RDS, KMS, SQS, Secrets Manager — severity-scored with compliance tags.",
   },
   {
-    icon: Radar,
-    title: "Live misconfig engine",
-    body: "Deterministic rules for S3, IAM, EC2, RDS — evidence from real cloud APIs, not guesses.",
-    accent: "text-success",
-    ring: "border-success/30 bg-success/10",
+    icon: GitBranch,
+    title: "Attack path theater",
+    body: "See how issues chain into breach outcomes — public storage, trust-wildcard takeover, priv-esc, exposed queues.",
   },
   {
     icon: Sparkles,
     title: "Cloud Assistant",
-    body: "Plain-language risk explanations and remediation steps grounded in your scan results.",
-    accent: "text-warning",
-    ring: "border-warning/30 bg-warning/10",
+    body: "Ask questions on your last scan. Get plain-language risk and prioritized remediation grounded in findings.",
   },
   {
     icon: FileText,
-    title: "Board-ready reports",
-    body: "Executive briefs, charts, findings tables — export PDF & Word in one click.",
-    accent: "text-danger",
-    ring: "border-danger/30 bg-danger/10",
+    title: "Evidence packages",
+    body: "Executive brief, metrics, and findings table — export for auditors, customers, and the board.",
+  },
+  {
+    icon: Target,
+    title: "Compliance map",
+    body: "Findings mapped to CIS AWS, NIST SP 800-53, and GDPR security controls — coverage you can explain.",
+  },
+  {
+    icon: Lock,
+    title: "Safe connection model",
+    body: "IAM keys or AssumeRole; secrets stay server-side; Demo mode for training without live risk.",
   },
 ];
 
 const STEPS = [
-  { n: "01", t: "Connect", d: "Link AWS or GCP with least-privilege credentials." },
-  { n: "02", t: "Scan", d: "Inventory configs and evaluate posture rules." },
-  { n: "03", t: "Prioritize", d: "Severity, compliance maps, and attack-relevant risk." },
-  { n: "04", t: "Remediate", d: "CLI fixes, re-scan, watch the posture trend climb." },
+  { n: "01", t: "CONNECT", d: "Link AWS with AssumeRole or direct read keys — or use Demo." },
+  { n: "02", t: "SCAN", d: "Inventory configuration and evaluate the full rule pack." },
+  { n: "03", t: "PRIORITIZE", d: "Posture score, criticals, compliance, and attack paths." },
+  { n: "04", t: "PROVE", d: "Export PDF/Word, remediate, re-scan, watch the trend climb." },
 ];
 
-const STATS = [
-  { v: "29+", l: "Detection rules" },
-  { v: "4", l: "Core services" },
-  { v: "CIS", l: "Mapped frameworks" },
-  { v: "0", l: "Write access needed" },
+const COVERAGE = [
+  { svc: "S3", items: "Public ACL/policy, BPA, encryption, versioning" },
+  { svc: "IAM", items: "Admin policies, MFA, trust *, CloudTrail kill, priv-esc" },
+  { svc: "EC2", items: "0.0.0.0/0 ports, IMDSv1, unencrypted EBS" },
+  { svc: "KMS", items: "Key policy Principal * on customer CMKs" },
+  { svc: "SQS", items: "Public queue resource policies" },
+  { svc: "Secrets", items: "Public or root-broad resource policies" },
+  { svc: "RDS", items: "Public instances, encryption, backups" },
+  { svc: "Paths", items: "Multi-step kill chains for board storytelling" },
 ];
 
-function FloatingOrbs() {
-  return (
-    <div className="pointer-events-none absolute inset-0 overflow-hidden">
-      <motion.div
-        className="absolute -left-32 top-20 size-[420px] rounded-full bg-accent-blue/20 blur-[100px]"
-        animate={{ x: [0, 40, 0], y: [0, 30, 0], opacity: [0.35, 0.55, 0.35] }}
-        transition={{ duration: 12, repeat: Infinity, ease: "easeInOut" }}
-      />
-      <motion.div
-        className="absolute -right-24 top-40 size-[380px] rounded-full bg-[#00e676]/12 blur-[100px]"
-        animate={{ x: [0, -30, 0], y: [0, 40, 0], opacity: [0.25, 0.45, 0.25] }}
-        transition={{ duration: 14, repeat: Infinity, ease: "easeInOut", delay: 1 }}
-      />
-      <motion.div
-        className="absolute bottom-0 left-1/3 size-[300px] rounded-full bg-[#ff9900]/10 blur-[90px]"
-        animate={{ scale: [1, 1.15, 1], opacity: [0.2, 0.4, 0.2] }}
-        transition={{ duration: 10, repeat: Infinity, ease: "easeInOut", delay: 0.5 }}
-      />
-      {/* Grid overlay */}
-      <div
-        className="absolute inset-0 opacity-[0.07]"
-        style={{
-          backgroundImage:
-            "linear-gradient(rgba(56,116,255,0.5) 1px, transparent 1px), linear-gradient(90deg, rgba(56,116,255,0.5) 1px, transparent 1px)",
-          backgroundSize: "48px 48px",
-          maskImage: "radial-gradient(ellipse 70% 60% at 50% 30%, black, transparent)",
-        }}
-      />
-    </div>
-  );
+function useUtcClock() {
+  const [t, setT] = useState("");
+  useEffect(() => {
+    const tick = () =>
+      setT(
+        new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC",
+      );
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, []);
+  return t;
 }
 
-function OrbitHero() {
-  return (
-    <div className="relative mx-auto flex h-[280px] w-[280px] items-center justify-center sm:h-[340px] sm:w-[340px]">
-      {/* Rings */}
-      {[1, 2, 3].map((i) => (
-        <motion.div
-          key={i}
-          className="absolute rounded-full border border-accent-blue/20"
-          style={{
-            width: 80 + i * 70,
-            height: 80 + i * 70,
-          }}
-          animate={{ rotate: i % 2 === 0 ? 360 : -360 }}
-          transition={{
-            duration: 18 + i * 6,
-            repeat: Infinity,
-            ease: "linear",
-          }}
-        >
-          <span
-            className={cn(
-              "absolute left-1/2 top-0 flex size-7 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border bg-panel shadow-lg",
-              i === 1 && "border-success/50 text-success",
-              i === 2 && "border-accent-blue/50 text-accent-blue",
-              i === 3 && "border-warning/50 text-warning",
-            )}
-          >
-            {i === 1 ? (
-              <Lock className="size-3.5" />
-            ) : i === 2 ? (
-              <Shield className="size-3.5" />
-            ) : (
-              <Activity className="size-3.5" />
-            )}
-          </span>
-        </motion.div>
-      ))}
+/** Particle / network canvas — JARVIS-style right-side hero motion */
+function HeroCanvas() {
+  const ref = useRef<HTMLCanvasElement>(null);
 
-      {/* Core */}
-      <motion.div
-        className="relative z-10 flex size-28 items-center justify-center rounded-2xl border border-accent-blue/40 bg-gradient-to-br from-accent-blue/30 via-panel to-[#0d1528] shadow-[0_0_60px_-10px_rgba(56,116,255,0.7)] sm:size-32"
-        animate={{ y: [0, -8, 0] }}
-        transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }}
-      >
-        <Shield className="size-12 text-accent-blue sm:size-14" strokeWidth={1.5} />
-        <motion.span
-          className="absolute inset-0 rounded-2xl border border-accent-blue/30"
-          animate={{ opacity: [0.3, 0.9, 0.3], scale: [1, 1.06, 1] }}
-          transition={{ duration: 2.4, repeat: Infinity }}
-        />
-      </motion.div>
-    </div>
-  );
+  useEffect(() => {
+    const canvas = ref.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    let raf = 0;
+    let w = 0;
+    let h = 0;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+    type P = { x: number; y: number; vx: number; vy: number };
+    let pts: P[] = [];
+
+    const resize = () => {
+      const parent = canvas.parentElement;
+      if (!parent) return;
+      w = parent.clientWidth;
+      h = parent.clientHeight;
+      canvas.width = w * dpr;
+      canvas.height = h * dpr;
+      canvas.style.width = `${w}px`;
+      canvas.style.height = `${h}px`;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      const n = Math.floor((w * h) / 14000);
+      pts = Array.from({ length: Math.max(28, Math.min(n, 70)) }, () => ({
+        x: Math.random() * w,
+        y: Math.random() * h,
+        vx: (Math.random() - 0.5) * 0.45,
+        vy: (Math.random() - 0.5) * 0.45,
+      }));
+    };
+
+    const draw = () => {
+      ctx.clearRect(0, 0, w, h);
+      // soft blue bloom
+      const g = ctx.createRadialGradient(w * 0.7, h * 0.45, 0, w * 0.7, h * 0.45, w * 0.55);
+      g.addColorStop(0, "rgba(33,150,243,0.12)");
+      g.addColorStop(1, "rgba(33,150,243,0)");
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, w, h);
+
+      for (const p of pts) {
+        p.x += p.vx;
+        p.y += p.vy;
+        if (p.x < 0 || p.x > w) p.vx *= -1;
+        if (p.y < 0 || p.y > h) p.vy *= -1;
+      }
+
+      const link = Math.min(w, h) * 0.18;
+      for (let i = 0; i < pts.length; i++) {
+        for (let j = i + 1; j < pts.length; j++) {
+          const a = pts[i];
+          const b = pts[j];
+          const dx = a.x - b.x;
+          const dy = a.y - b.y;
+          const d = Math.hypot(dx, dy);
+          if (d < link) {
+            const alpha = (1 - d / link) * 0.35;
+            ctx.strokeStyle = `rgba(33,150,243,${alpha})`;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(a.x, a.y);
+            ctx.lineTo(b.x, b.y);
+            ctx.stroke();
+          }
+        }
+      }
+
+      for (const p of pts) {
+        ctx.fillStyle = "rgba(33,150,243,0.85)";
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 1.6, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // scanning line
+      const t = (performance.now() / 40) % (h + 80);
+      const lg = ctx.createLinearGradient(0, t - 40, 0, t + 40);
+      lg.addColorStop(0, "rgba(33,150,243,0)");
+      lg.addColorStop(0.5, "rgba(33,150,243,0.18)");
+      lg.addColorStop(1, "rgba(33,150,243,0)");
+      ctx.fillStyle = lg;
+      ctx.fillRect(0, t - 40, w, 80);
+
+      raf = requestAnimationFrame(draw);
+    };
+
+    resize();
+    draw();
+    window.addEventListener("resize", resize);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener("resize", resize);
+    };
+  }, []);
+
+  return <canvas ref={ref} className="h-full w-full" aria-hidden />;
 }
 
 function MagneticButton({
@@ -159,13 +305,13 @@ function MagneticButton({
   className,
 }: {
   children: React.ReactNode;
-  onClick: () => void;
+  onClick?: () => void;
   className?: string;
 }) {
   const x = useMotionValue(0);
   const y = useMotionValue(0);
-  const sx = useSpring(x, { stiffness: 200, damping: 15 });
-  const sy = useSpring(y, { stiffness: 200, damping: 15 });
+  const sx = useSpring(x, { stiffness: 220, damping: 16 });
+  const sy = useSpring(y, { stiffness: 220, damping: 16 });
 
   return (
     <motion.button
@@ -173,15 +319,15 @@ function MagneticButton({
       onClick={onClick}
       style={{ x: sx, y: sy }}
       onMouseMove={(e) => {
-        const rect = e.currentTarget.getBoundingClientRect();
-        x.set((e.clientX - rect.left - rect.width / 2) * 0.25);
-        y.set((e.clientY - rect.top - rect.height / 2) * 0.25);
+        const r = e.currentTarget.getBoundingClientRect();
+        x.set((e.clientX - r.left - r.width / 2) * 0.22);
+        y.set((e.clientY - r.top - r.height / 2) * 0.22);
       }}
       onMouseLeave={() => {
         x.set(0);
         y.set(0);
       }}
-      whileTap={{ scale: 0.97 }}
+      whileTap={{ scale: 0.98 }}
       className={className}
     >
       {children}
@@ -189,292 +335,756 @@ function MagneticButton({
   );
 }
 
+function FadeIn({
+  children,
+  className,
+  delay = 0,
+}: {
+  children: React.ReactNode;
+  className?: string;
+  delay?: number;
+}) {
+  const ref = useRef(null);
+  const inView = useInView(ref, { once: true, margin: "-80px" });
+  return (
+    <motion.div
+      ref={ref}
+      className={className}
+      initial={{ opacity: 0, y: 28 }}
+      animate={inView ? { opacity: 1, y: 0 } : {}}
+      transition={{ duration: 0.65, delay, ease: [0.22, 1, 0.36, 1] }}
+    >
+      {children}
+    </motion.div>
+  );
+}
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <p
+      className="font-mono text-[10px] tracking-[0.22em]"
+      style={{ color: C.blue }}
+    >
+      {children}
+    </p>
+  );
+}
+
 export function Landing({ onEnter }: { onEnter: () => void }) {
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
+  const utc = useUtcClock();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [scrolled, setScrolled] = useState(false);
+
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 12);
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
 
   return (
-    <div className="relative min-h-screen overflow-x-hidden bg-background text-foreground">
-      <FloatingOrbs />
-
-      {/* Nav */}
-      <motion.header
-        initial={{ y: -24, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
-        className="relative z-20 mx-auto flex max-w-6xl items-center justify-between px-6 py-5"
+    <div
+      className="relative min-h-screen overflow-x-hidden antialiased"
+      style={{ background: C.bg, color: C.text }}
+    >
+      {/* Fixed header — dual bar like JARVIS */}
+      <header
+        className={cn(
+          "fixed inset-x-0 top-0 z-50 transition-all duration-300",
+          scrolled ? "bg-[#050505]/95 backdrop-blur-md" : "bg-transparent",
+        )}
       >
-        <div className="flex items-center gap-2.5">
-          <div className="flex size-9 items-center justify-center rounded-lg bg-accent-blue">
-            <Shield className="size-4.5 text-background" strokeWidth={2.4} />
-          </div>
-          <div>
-            <p className="font-mono text-xs font-bold tracking-[0.2em] text-foreground">
-              VAULTSCAN
-            </p>
-            <p className="font-mono text-[9px] tracking-[0.18em] text-muted-foreground">
-              CSPM
-            </p>
-          </div>
-        </div>
-        <div className="hidden items-center gap-6 font-mono text-[11px] tracking-wider text-muted-foreground sm:flex">
-          <a href="#features" className="transition hover:text-foreground">
-            FEATURES
-          </a>
-          <a href="#how" className="transition hover:text-foreground">
-            HOW IT WORKS
-          </a>
-          <button
-            type="button"
-            onClick={onEnter}
-            className="rounded-md border border-accent-blue/40 bg-accent-blue/10 px-3 py-1.5 font-bold text-accent-blue transition hover:bg-accent-blue/20"
+        <div
+          className="flex h-8 items-center justify-between border-b px-6 lg:px-12"
+          style={{ borderColor: C.border }}
+        >
+          <span
+            className="font-mono text-[10px] uppercase tracking-widest"
+            style={{ color: C.dim }}
           >
-            OPEN CONSOLE
-          </button>
-        </div>
-      </motion.header>
-
-      {/* Hero */}
-      <section className="relative z-10 mx-auto grid max-w-6xl items-center gap-10 px-6 pb-20 pt-8 lg:grid-cols-2 lg:pb-28 lg:pt-12">
-        <div>
-          <motion.div
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.15, duration: 0.55 }}
-            className="mb-5 inline-flex items-center gap-2 rounded-full border border-border bg-panel/80 px-3 py-1 font-mono text-[10px] tracking-[0.16em] text-muted-foreground backdrop-blur"
-          >
-            <span className="pulse-dot size-1.5 rounded-full bg-success" />
-            CLOUD SECURITY POSTURE MANAGEMENT
-          </motion.div>
-
-          <motion.h1
-            initial={{ opacity: 0, y: 28 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.25, duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
-            className="text-4xl font-bold leading-[1.08] tracking-tight sm:text-5xl lg:text-[3.4rem]"
-          >
-            See every open door
-            <br />
-            <span className="bg-gradient-to-r from-accent-blue via-[#7aa2ff] to-success bg-clip-text text-transparent">
-              before attackers do.
+            SYS:VAULTSCAN-OS &nbsp;/&nbsp; BUILD 2026.07
+          </span>
+          <div className="hidden items-center gap-6 md:flex">
+            <span
+              className="font-mono text-[10px]"
+              style={{ color: C.dim }}
+            >
+              <span style={{ color: C.green }}>●</span>
+              &nbsp;ALL_SYSTEMS_NOMINAL
             </span>
-          </motion.h1>
+            <span
+              className="font-mono text-[10px] tabular-nums"
+              style={{ color: C.dim }}
+            >
+              {utc}
+            </span>
+          </div>
+        </div>
+        <div className="flex h-14 items-center justify-between px-6 lg:px-12">
+          <a href="#" className="group flex items-center gap-3">
+            <div
+              className="relative flex h-7 w-7 items-center justify-center border"
+              style={{ borderColor: C.blue }}
+            >
+              <div className="h-2 w-2" style={{ background: C.blue }} />
+              <div
+                className="absolute inset-0 opacity-10 transition group-hover:opacity-20"
+                style={{ background: C.blue }}
+              />
+            </div>
+            <span
+              className="text-2xl tracking-[0.15em]"
+              style={{ fontFamily: "var(--font-space-grotesk), system-ui" }}
+            >
+              VAULTSCAN
+            </span>
+            <span
+              className="ml-1 hidden border-l pl-3 font-mono text-[10px] tracking-widest lg:block"
+              style={{ borderColor: C.border, color: C.dim }}
+            >
+              CSPM
+            </span>
+          </a>
 
-          <motion.p
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.4, duration: 0.6 }}
-            className="mt-5 max-w-lg text-sm leading-relaxed text-muted-foreground sm:text-base"
-          >
-            VaultScan inspects AWS (and connects Google Cloud) for dangerous
-            misconfigurations — public storage, open admin ports, weak IAM —
-            then explains risk and ships PDF/Word reports your team can act on.
-          </motion.p>
+          <nav className="hidden items-center gap-7 md:flex">
+            {NAV.map((n) => (
+              <a
+                key={n.href}
+                href={n.href}
+                className="font-mono text-[11px] tracking-[0.18em] transition-colors duration-200 hover:text-[#2196f3]"
+                style={{ color: C.mute }}
+              >
+                {n.label}
+              </a>
+            ))}
+          </nav>
 
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.55, duration: 0.55 }}
-            className="mt-8 flex flex-wrap items-center gap-3"
-          >
+          <div className="hidden items-center gap-4 md:flex">
+            <button
+              type="button"
+              onClick={onEnter}
+              className="font-mono text-[11px] tracking-widest transition-colors hover:text-[#f2ede6]"
+              style={{ color: C.mute }}
+            >
+              CONSOLE
+            </button>
             <MagneticButton
               onClick={onEnter}
-              className="group relative flex items-center gap-2 overflow-hidden rounded-lg bg-accent-blue px-6 py-3.5 font-mono text-xs font-bold tracking-[0.14em] text-background shadow-[0_0_40px_-8px_rgba(56,116,255,0.8)]"
+              className="flex h-9 items-center px-5 font-mono text-[11px] font-semibold tracking-widest transition-colors"
+              style={{ background: C.blue, color: C.bg }}
             >
-              <span className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/25 to-transparent transition duration-700 group-hover:translate-x-full" />
-              <Radar className="size-4" />
-              ENTER DASHBOARD
-              <ArrowRight className="size-4 transition group-hover:translate-x-0.5" />
+              LAUNCH_SCAN →
             </MagneticButton>
-            <a
-              href="#how"
-              className="flex items-center gap-2 rounded-lg border border-border bg-panel/60 px-5 py-3.5 font-mono text-xs font-bold tracking-[0.12em] text-muted-foreground backdrop-blur transition hover:border-border-strong hover:text-foreground"
-            >
-              <Layers className="size-4" />
-              HOW IT WORKS
-            </a>
-          </motion.div>
+          </div>
 
-          <motion.ul
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 0.75 }}
-            className="mt-8 flex flex-wrap gap-x-5 gap-y-2 font-mono text-[10px] tracking-wider text-muted-foreground"
+          <button
+            type="button"
+            className="p-1 md:hidden"
+            style={{ color: C.text }}
+            aria-label="Menu"
+            onClick={() => setMenuOpen((v) => !v)}
           >
-            {["READ-ONLY SCAN", "ASSUME ROLE", "CIS MAPPED", "PDF EXPORT"].map(
-              (t) => (
+            {menuOpen ? <X className="size-5" /> : <Menu className="size-5" />}
+          </button>
+        </div>
+      </header>
+
+      {/* Mobile drawer */}
+      <div
+        className={cn(
+          "fixed inset-0 z-40 flex flex-col transition-opacity duration-300 md:hidden",
+          menuOpen
+            ? "pointer-events-auto opacity-100"
+            : "pointer-events-none opacity-0",
+        )}
+        style={{ background: C.bg, paddingTop: 88 }}
+      >
+        <div className="flex flex-col border-t" style={{ borderColor: C.border }}>
+          {NAV.map((n, i) => (
+            <a
+              key={n.href}
+              href={n.href}
+              onClick={() => setMenuOpen(false)}
+              className="flex items-center justify-between border-b px-8 py-7 text-4xl tracking-wider transition-colors hover:text-[#2196f3]"
+              style={{ borderColor: C.border, color: C.text }}
+            >
+              {n.label}
+              <span className="font-mono text-xs" style={{ color: C.dim }}>
+                {String(i + 1).padStart(2, "0")}
+              </span>
+            </a>
+          ))}
+        </div>
+        <div className="mt-auto border-t p-8" style={{ borderColor: C.border }}>
+          <button
+            type="button"
+            onClick={() => {
+              setMenuOpen(false);
+              onEnter();
+            }}
+            className="block w-full py-5 text-center font-mono text-sm font-semibold tracking-widest"
+            style={{ background: C.blue, color: C.bg }}
+          >
+            LAUNCH_SCAN →
+          </button>
+        </div>
+      </div>
+
+      {/* ─── HERO ─────────────────────────────────────────────────────────── */}
+      <section
+        className="relative flex min-h-screen flex-col justify-center overflow-hidden pt-[88px]"
+        style={{
+          backgroundImage:
+            "linear-gradient(rgba(30,30,30,0.45) 1px, transparent 1px), linear-gradient(90deg, rgba(30,30,30,0.45) 1px, transparent 1px)",
+          backgroundSize: "48px 48px",
+        }}
+      >
+        <div className="pointer-events-none absolute inset-y-0 right-0 z-0 w-full lg:w-[55%]">
+          <HeroCanvas />
+        </div>
+        <div
+          className="pointer-events-none absolute inset-0 z-0"
+          style={{
+            background:
+              "radial-gradient(ellipse 50% 60% at 80% 50%, rgba(33,150,243,0.07) 0%, transparent 70%)",
+          }}
+        />
+
+        <div className="relative z-20 mx-auto w-full max-w-[1400px] px-6 py-20 lg:px-12 lg:py-28">
+          <FadeIn delay={0.05}>
+            <div
+              className="mb-6 inline-flex items-center gap-2 border px-3 py-1.5 font-mono text-[10px] tracking-[0.2em]"
+              style={{ borderColor: C.border, color: C.mute }}
+            >
+              <span
+                className="size-1.5 animate-pulse rounded-full"
+                style={{ background: C.green }}
+              />
+              CLOUD SECURITY POSTURE · READ-ONLY · CIS MAPPED
+            </div>
+          </FadeIn>
+
+          <FadeIn delay={0.12}>
+            <h1
+              className="max-w-4xl text-4xl font-bold leading-[1.05] tracking-tight sm:text-6xl lg:text-7xl"
+              style={{ fontFamily: "var(--font-space-grotesk), system-ui" }}
+            >
+              Stop paying for
+              <br />
+              <span style={{ color: C.blue }}>cloud mistakes</span>
+              <br />
+              you can detect today.
+            </h1>
+          </FadeIn>
+
+          <FadeIn delay={0.22}>
+            <p
+              className="mt-6 max-w-xl text-base leading-relaxed sm:text-lg"
+              style={{ color: C.mute }}
+            >
+              VaultScan finds the misconfigurations that empty bank accounts —
+              public storage, admin IAM, open ports, exposed keys — then shows
+              attack paths and ships board-ready reports before attackers bill
+              you in downtime and fines.
+            </p>
+          </FadeIn>
+
+          <FadeIn delay={0.32}>
+            <div className="mt-10 flex flex-wrap items-center gap-4">
+              <MagneticButton
+                onClick={onEnter}
+                className="group relative flex h-12 items-center gap-2 overflow-hidden px-7 font-mono text-[12px] font-semibold tracking-[0.16em]"
+                style={{ background: C.blue, color: C.bg }}
+              >
+                <span className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/25 to-transparent transition duration-700 group-hover:translate-x-full" />
+                <Radar className="size-4" />
+                ENTER_CONSOLE
+                <ArrowRight className="size-4 transition group-hover:translate-x-0.5" />
+              </MagneticButton>
+              <a
+                href="#impact"
+                className="flex h-12 items-center gap-2 border px-6 font-mono text-[12px] tracking-[0.14em] transition hover:border-[#2196f3] hover:text-[#2196f3]"
+                style={{ borderColor: C.border, color: C.mute }}
+              >
+                <DollarSign className="size-4" />
+                SEE_THE_COST
+              </a>
+            </div>
+          </FadeIn>
+
+          <FadeIn delay={0.42}>
+            <ul className="mt-10 flex flex-wrap gap-x-6 gap-y-2 font-mono text-[10px] tracking-wider" style={{ color: C.dim }}>
+              {[
+                "ASSUME_ROLE",
+                "ZERO_WRITE",
+                "DEMO_MODE",
+                "PDF_WORD",
+                "ATTACK_PATHS",
+              ].map((t) => (
                 <li key={t} className="flex items-center gap-1.5">
-                  <CheckCircle2 className="size-3 text-success" />
+                  <CheckCircle2 className="size-3" style={{ color: C.green }} />
                   {t}
                 </li>
-              ),
-            )}
-          </motion.ul>
+              ))}
+            </ul>
+          </FadeIn>
         </div>
-
-        <motion.div
-          initial={{ opacity: 0, scale: 0.9 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ delay: 0.35, duration: 0.8, ease: [0.22, 1, 0.36, 1] }}
-          className="relative"
-        >
-          {mounted && <OrbitHero />}
-        </motion.div>
       </section>
 
-      {/* Stats strip */}
-      <section className="relative z-10 border-y border-border bg-panel/40 backdrop-blur">
-        <div className="mx-auto grid max-w-6xl grid-cols-2 gap-px sm:grid-cols-4">
-          {STATS.map((s, i) => (
-            <motion.div
-              key={s.l}
-              initial={{ opacity: 0, y: 12 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true, margin: "-40px" }}
-              transition={{ delay: i * 0.08, duration: 0.45 }}
-              className="px-6 py-7 text-center"
+      {/* ─── IMPACT / MONEY ───────────────────────────────────────────────── */}
+      <section
+        id="impact"
+        className="border-t py-24"
+        style={{ borderColor: C.border }}
+      >
+        <div className="mx-auto max-w-[1400px] px-6 lg:px-12">
+          <FadeIn>
+            <SectionLabel>// BUSINESS_IMPACT</SectionLabel>
+            <h2
+              className="mt-3 max-w-3xl text-3xl font-bold tracking-tight sm:text-4xl"
+              style={{ fontFamily: "var(--font-space-grotesk), system-ui" }}
             >
-              <p className="font-mono text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
-                {s.v}
-              </p>
-              <p className="mt-1 font-mono text-[10px] tracking-[0.16em] text-muted-foreground">
-                {s.l.toUpperCase()}
-              </p>
-            </motion.div>
-          ))}
-        </div>
-      </section>
-
-      {/* Features */}
-      <section id="features" className="relative z-10 mx-auto max-w-6xl px-6 py-20">
-        <motion.div
-          initial={{ opacity: 0, y: 16 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          viewport={{ once: true }}
-          className="mb-10 max-w-xl"
-        >
-          <p className="font-mono text-[10px] tracking-[0.22em] text-accent-blue">
-            CAPABILITIES
-          </p>
-          <h2 className="mt-2 text-2xl font-bold tracking-tight sm:text-3xl">
-            Built for clarity under pressure
-          </h2>
-          <p className="mt-2 text-sm text-muted-foreground">
-            From connection to report — one console for posture, risk, and proof.
-          </p>
-        </motion.div>
-
-        <div className="grid gap-4 sm:grid-cols-2">
-          {FEATURES.map((f, i) => (
-            <motion.div
-              key={f.title}
-              initial={{ opacity: 0, y: 24 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true, margin: "-60px" }}
-              transition={{ delay: i * 0.08, duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
-              whileHover={{ y: -4, transition: { duration: 0.2 } }}
-              className="group rounded-xl border border-border bg-panel/80 p-6 backdrop-blur transition hover:border-accent-blue/35 hover:shadow-[0_20px_50px_-30px_rgba(56,116,255,0.5)]"
-            >
-              <div
-                className={cn(
-                  "mb-4 flex size-11 items-center justify-center rounded-lg border",
-                  f.ring,
-                  f.accent,
-                )}
-              >
-                <f.icon className="size-5" />
-              </div>
-              <h3 className="text-base font-semibold text-foreground">{f.title}</h3>
-              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                {f.body}
-              </p>
-            </motion.div>
-          ))}
-        </div>
-      </section>
-
-      {/* How it works */}
-      <section id="how" className="relative z-10 border-t border-border bg-panel/30 py-20">
-        <div className="mx-auto max-w-6xl px-6">
-          <motion.div
-            initial={{ opacity: 0, y: 16 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true }}
-            className="mb-12 text-center"
-          >
-            <p className="font-mono text-[10px] tracking-[0.22em] text-accent-blue">
-              PIPELINE
-            </p>
-            <h2 className="mt-2 text-2xl font-bold sm:text-3xl">
-              Four steps to clear posture
+              Misconfigurations don’t just “fail audits.”
+              <span style={{ color: C.blue }}> They burn cash.</span>
             </h2>
-          </motion.div>
+            <p className="mt-4 max-w-2xl text-sm leading-relaxed sm:text-base" style={{ color: C.mute }}>
+              Most cloud breaches start with a setting left open — not a
+              zero-day. The bill shows up later as incident response, legal,
+              regulatory fines, customer churn, and months of SOC overtime.
+            </p>
+          </FadeIn>
 
-          <div className="relative grid gap-6 md:grid-cols-4">
-            <div className="pointer-events-none absolute left-[12%] right-[12%] top-8 hidden h-px bg-gradient-to-r from-transparent via-accent-blue/40 to-transparent md:block" />
-            {STEPS.map((s, i) => (
-              <motion.div
-                key={s.n}
-                initial={{ opacity: 0, y: 28 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                viewport={{ once: true }}
-                transition={{ delay: i * 0.12, duration: 0.5 }}
-                className="relative rounded-xl border border-border bg-background/60 p-5 text-center backdrop-blur"
-              >
-                <motion.span
-                  className="mx-auto mb-4 flex size-12 items-center justify-center rounded-full border border-accent-blue/40 bg-accent-blue/10 font-mono text-sm font-bold text-accent-blue"
-                  whileInView={{ scale: [0.8, 1.08, 1] }}
-                  viewport={{ once: true }}
-                  transition={{ delay: 0.15 + i * 0.12, duration: 0.5 }}
+          <div className="mt-12 grid gap-px sm:grid-cols-2 lg:grid-cols-4" style={{ background: C.border }}>
+            {IMPACT_STATS.map((s, i) => (
+              <FadeIn key={s.l} delay={i * 0.06}>
+                <div className="h-full p-7" style={{ background: C.bg }}>
+                  <p
+                    className="font-mono text-3xl font-bold tracking-tight sm:text-4xl"
+                    style={{ color: C.blue }}
+                  >
+                    {s.v}
+                  </p>
+                  <p className="mt-2 font-mono text-[11px] font-semibold tracking-[0.14em]" style={{ color: C.text }}>
+                    {s.l.toUpperCase()}
+                  </p>
+                  <p className="mt-3 text-xs leading-relaxed" style={{ color: C.mute }}>
+                    {s.s}
+                  </p>
+                </div>
+              </FadeIn>
+            ))}
+          </div>
+
+          <div className="mt-16 grid gap-4 md:grid-cols-2">
+            {MONEY_PATHS.map((m, i) => (
+              <FadeIn key={m.title} delay={i * 0.07}>
+                <div
+                  className="group h-full border p-6 transition hover:border-[#2196f3]/50"
+                  style={{ borderColor: C.border, background: "#080808" }}
                 >
-                  {s.n}
-                </motion.span>
-                <h3 className="font-semibold text-foreground">{s.t}</h3>
-                <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-                  {s.d}
-                </p>
-              </motion.div>
+                  <div className="mb-4 flex items-start justify-between gap-3">
+                    <div
+                      className="flex size-10 items-center justify-center border"
+                      style={{ borderColor: C.blue, color: C.blue }}
+                    >
+                      <m.icon className="size-5" />
+                    </div>
+                    <span
+                      className="font-mono text-[10px] tracking-widest"
+                      style={{ color: C.amber }}
+                    >
+                      {m.loss.toUpperCase()}
+                    </span>
+                  </div>
+                  <h3 className="text-lg font-semibold" style={{ color: C.text }}>
+                    {m.title}
+                  </h3>
+                  <p className="mt-2 text-sm leading-relaxed" style={{ color: C.mute }}>
+                    {m.body}
+                  </p>
+                </div>
+              </FadeIn>
             ))}
           </div>
         </div>
       </section>
 
-      {/* Final CTA */}
-      <section className="relative z-10 mx-auto max-w-6xl px-6 py-20">
-        <motion.div
-          initial={{ opacity: 0, scale: 0.96 }}
-          whileInView={{ opacity: 1, scale: 1 }}
-          viewport={{ once: true }}
-          transition={{ duration: 0.55 }}
-          className="relative overflow-hidden rounded-2xl border border-accent-blue/30 bg-gradient-to-br from-accent-blue/15 via-panel to-background px-8 py-14 text-center"
-        >
-          <motion.div
-            className="pointer-events-none absolute -right-20 -top-20 size-64 rounded-full bg-accent-blue/20 blur-3xl"
-            animate={{ opacity: [0.3, 0.6, 0.3] }}
-            transition={{ duration: 5, repeat: Infinity }}
-          />
-          <p className="font-mono text-[10px] tracking-[0.22em] text-accent-blue">
-            READY WHEN YOU ARE
-          </p>
-          <h2 className="mt-3 text-2xl font-bold sm:text-3xl">
-            Launch the security console
-          </h2>
-          <p className="mx-auto mt-3 max-w-md text-sm text-muted-foreground">
-            Connect a cloud, run a scan, generate a report — posture you can
-            prove.
-          </p>
-          <MagneticButton
-            onClick={onEnter}
-            className="mt-8 inline-flex items-center gap-2 rounded-lg bg-accent-blue px-8 py-3.5 font-mono text-xs font-bold tracking-[0.16em] text-background"
-          >
-            OPEN VAULTSCAN
-            <ArrowRight className="size-4" />
-          </MagneticButton>
-        </motion.div>
+      {/* ─── WHY US ───────────────────────────────────────────────────────── */}
+      <section
+        id="why"
+        className="border-t py-24"
+        style={{ borderColor: C.border, background: "#070707" }}
+      >
+        <div className="mx-auto max-w-[1400px] px-6 lg:px-12">
+          <FadeIn>
+            <SectionLabel>// WHY_VAULTSCAN</SectionLabel>
+            <h2
+              className="mt-3 max-w-2xl text-3xl font-bold sm:text-4xl"
+              style={{ fontFamily: "var(--font-space-grotesk), system-ui" }}
+            >
+              Why teams choose us
+            </h2>
+            <p className="mt-3 max-w-xl text-sm" style={{ color: C.mute }}>
+              Built for portfolio-grade CSPM demos and real AWS validation labs —
+              clarity for executives, evidence for engineers.
+            </p>
+          </FadeIn>
+
+          <div className="mt-12 grid gap-0 border md:grid-cols-2 lg:grid-cols-3" style={{ borderColor: C.border }}>
+            {WHY_US.map((w, i) => (
+              <FadeIn key={w.n} delay={i * 0.05}>
+                <div
+                  className="h-full border-b border-r p-7 transition hover:bg-[#0a0a0a]"
+                  style={{ borderColor: C.border }}
+                >
+                  <span className="font-mono text-xs" style={{ color: C.blue }}>
+                    {w.n}
+                  </span>
+                  <h3 className="mt-3 text-base font-semibold" style={{ color: C.text }}>
+                    {w.t}
+                  </h3>
+                  <p className="mt-2 text-sm leading-relaxed" style={{ color: C.mute }}>
+                    {w.d}
+                  </p>
+                </div>
+              </FadeIn>
+            ))}
+          </div>
+        </div>
       </section>
 
-      <footer className="relative z-10 border-t border-border py-6 text-center font-mono text-[10px] tracking-wider text-muted-foreground">
-        VAULTSCAN · CLOUD SECURITY POSTURE MGMT · 2026
+      {/* ─── FEATURES ─────────────────────────────────────────────────────── */}
+      <section id="features" className="border-t py-24" style={{ borderColor: C.border }}>
+        <div className="mx-auto max-w-[1400px] px-6 lg:px-12">
+          <FadeIn>
+            <SectionLabel>// CAPABILITIES</SectionLabel>
+            <h2
+              className="mt-3 text-3xl font-bold sm:text-4xl"
+              style={{ fontFamily: "var(--font-space-grotesk), system-ui" }}
+            >
+              One console. Full posture story.
+            </h2>
+          </FadeIn>
+          <div className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {FEATURES.map((f, i) => (
+              <FadeIn key={f.title} delay={i * 0.06}>
+                <motion.div
+                  whileHover={{ y: -3 }}
+                  className="h-full border p-6"
+                  style={{ borderColor: C.border, background: "#080808" }}
+                >
+                  <div
+                    className="mb-4 flex size-10 items-center justify-center border"
+                    style={{ borderColor: `${C.blue}66`, color: C.blue }}
+                  >
+                    <f.icon className="size-5" />
+                  </div>
+                  <h3 className="font-semibold" style={{ color: C.text }}>
+                    {f.title}
+                  </h3>
+                  <p className="mt-2 text-sm leading-relaxed" style={{ color: C.mute }}>
+                    {f.body}
+                  </p>
+                </motion.div>
+              </FadeIn>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ─── PIPELINE ─────────────────────────────────────────────────────── */}
+      <section
+        id="pipeline"
+        className="border-t py-24"
+        style={{ borderColor: C.border, background: "#070707" }}
+      >
+        <div className="mx-auto max-w-[1400px] px-6 lg:px-12">
+          <FadeIn className="text-center">
+            <SectionLabel>// PIPELINE</SectionLabel>
+            <h2
+              className="mt-3 text-3xl font-bold sm:text-4xl"
+              style={{ fontFamily: "var(--font-space-grotesk), system-ui" }}
+            >
+              From connect to proof in four steps
+            </h2>
+          </FadeIn>
+          <div className="relative mt-14 grid gap-6 md:grid-cols-4">
+            <div
+              className="pointer-events-none absolute left-[12%] right-[12%] top-7 hidden h-px md:block"
+              style={{
+                background: `linear-gradient(90deg, transparent, ${C.blue}66, transparent)`,
+              }}
+            />
+            {STEPS.map((s, i) => (
+              <FadeIn key={s.n} delay={i * 0.1}>
+                <div
+                  className="relative border p-6 text-center"
+                  style={{ borderColor: C.border, background: C.bg }}
+                >
+                  <motion.span
+                    className="mx-auto mb-4 flex size-14 items-center justify-center border font-mono text-sm font-bold"
+                    style={{ borderColor: C.blue, color: C.blue }}
+                    whileInView={{ scale: [0.85, 1.06, 1] }}
+                    viewport={{ once: true }}
+                    transition={{ delay: 0.1 + i * 0.08, duration: 0.45 }}
+                  >
+                    {s.n}
+                  </motion.span>
+                  <h3 className="font-mono text-sm tracking-[0.18em]" style={{ color: C.text }}>
+                    {s.t}
+                  </h3>
+                  <p className="mt-2 text-xs leading-relaxed" style={{ color: C.mute }}>
+                    {s.d}
+                  </p>
+                </div>
+              </FadeIn>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ─── COVERAGE ─────────────────────────────────────────────────────── */}
+      <section id="coverage" className="border-t py-24" style={{ borderColor: C.border }}>
+        <div className="mx-auto max-w-[1400px] px-6 lg:px-12">
+          <FadeIn>
+            <SectionLabel>// DETECTION_SURFACE</SectionLabel>
+            <h2
+              className="mt-3 max-w-2xl text-3xl font-bold sm:text-4xl"
+              style={{ fontFamily: "var(--font-space-grotesk), system-ui" }}
+            >
+              What we actually check
+            </h2>
+            <p className="mt-3 max-w-xl text-sm" style={{ color: C.mute }}>
+              Validation-lab coverage including intentional high-risk patterns —
+              so you can prove the scanner before production rollout.
+            </p>
+          </FadeIn>
+          <div className="mt-10 grid gap-px sm:grid-cols-2 lg:grid-cols-4" style={{ background: C.border }}>
+            {COVERAGE.map((c, i) => (
+              <FadeIn key={c.svc} delay={i * 0.04}>
+                <div className="h-full p-5" style={{ background: C.bg }}>
+                  <p className="font-mono text-xs font-bold tracking-[0.2em]" style={{ color: C.blue }}>
+                    {c.svc}
+                  </p>
+                  <p className="mt-2 text-sm leading-relaxed" style={{ color: C.mute }}>
+                    {c.items}
+                  </p>
+                </div>
+              </FadeIn>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ─── TRUST ────────────────────────────────────────────────────────── */}
+      <section
+        id="security"
+        className="border-t py-24"
+        style={{ borderColor: C.border, background: "#070707" }}
+      >
+        <div className="mx-auto grid max-w-[1400px] gap-12 px-6 lg:grid-cols-2 lg:px-12">
+          <FadeIn>
+            <SectionLabel>// TRUST_MODEL</SectionLabel>
+            <h2
+              className="mt-3 text-3xl font-bold sm:text-4xl"
+              style={{ fontFamily: "var(--font-space-grotesk), system-ui" }}
+            >
+              Security that respects your perimeter
+            </h2>
+            <ul className="mt-8 space-y-4">
+              {[
+                "Read-only scanning — no resource mutation from the engine",
+                "Prefer STS AssumeRole with short-lived credentials",
+                "Secrets stored server-side; never in the browser bundle",
+                "Demo mode for training without live cloud risk",
+                "Findings tagged to CIS / NIST / GDPR for stakeholder mapping",
+              ].map((t) => (
+                <li key={t} className="flex items-start gap-3 text-sm" style={{ color: C.mute }}>
+                  <CheckCircle2 className="mt-0.5 size-4 shrink-0" style={{ color: C.green }} />
+                  {t}
+                </li>
+              ))}
+            </ul>
+          </FadeIn>
+          <FadeIn delay={0.12}>
+            <div
+              className="border p-8"
+              style={{ borderColor: C.border, background: C.bg }}
+            >
+              <div className="mb-6 flex items-center gap-3">
+                <Activity className="size-5" style={{ color: C.blue }} />
+                <p className="font-mono text-[11px] tracking-[0.2em]" style={{ color: C.blue }}>
+                  LIVE_POSTURE_LOOP
+                </p>
+              </div>
+              {[
+                { t: "Connect", d: "Settings → cloud credentials" },
+                { t: "Scan", d: "Engine evaluates configs + lab rules" },
+                { t: "Explain", d: "Scores, compliance, attack paths" },
+                { t: "Export", d: "PDF / Word for leadership" },
+                { t: "Re-scan", d: "Prove remediation with trend" },
+              ].map((row, i) => (
+                <div
+                  key={row.t}
+                  className="flex items-center gap-4 border-b py-3 last:border-0"
+                  style={{ borderColor: C.border }}
+                >
+                  <span className="font-mono text-[10px]" style={{ color: C.dim }}>
+                    {String(i + 1).padStart(2, "0")}
+                  </span>
+                  <span className="w-20 font-mono text-xs font-bold" style={{ color: C.text }}>
+                    {row.t}
+                  </span>
+                  <span className="text-xs" style={{ color: C.mute }}>
+                    {row.d}
+                  </span>
+                </div>
+              ))}
+              <MagneticButton
+                onClick={onEnter}
+                className="mt-8 flex w-full items-center justify-center gap-2 py-4 font-mono text-[12px] font-semibold tracking-widest"
+                style={{ background: C.blue, color: C.bg }}
+              >
+                OPEN_CONSOLE
+                <Zap className="size-4" />
+              </MagneticButton>
+            </div>
+          </FadeIn>
+        </div>
+      </section>
+
+      {/* ─── CTA ──────────────────────────────────────────────────────────── */}
+      <section className="border-t py-24" style={{ borderColor: C.border }}>
+        <div className="mx-auto max-w-[1400px] px-6 lg:px-12">
+          <FadeIn>
+            <div
+              className="relative overflow-hidden border px-8 py-16 text-center sm:px-16"
+              style={{
+                borderColor: `${C.blue}55`,
+                background:
+                  "linear-gradient(135deg, rgba(33,150,243,0.12) 0%, #050505 45%, #050505 100%)",
+              }}
+            >
+              <motion.div
+                className="pointer-events-none absolute -right-16 -top-16 size-72 rounded-full blur-3xl"
+                style={{ background: "rgba(33,150,243,0.2)" }}
+                animate={{ opacity: [0.3, 0.55, 0.3] }}
+                transition={{ duration: 5, repeat: Infinity }}
+              />
+              <SectionLabel>// READY_STATE</SectionLabel>
+              <h2
+                className="relative mt-4 text-3xl font-bold sm:text-5xl"
+                style={{ fontFamily: "var(--font-space-grotesk), system-ui" }}
+              >
+                Find open doors before
+                <br />
+                they become invoices.
+              </h2>
+              <p className="relative mx-auto mt-4 max-w-lg text-sm" style={{ color: C.mute }}>
+                Launch the console, run Demo mode in seconds, or connect AWS and
+                generate your first posture report today.
+              </p>
+              <MagneticButton
+                onClick={onEnter}
+                className="relative mt-10 inline-flex items-center gap-2 px-10 py-4 font-mono text-[12px] font-semibold tracking-[0.18em]"
+                style={{ background: C.blue, color: C.bg }}
+              >
+                LAUNCH_VAULTSCAN →
+              </MagneticButton>
+            </div>
+          </FadeIn>
+        </div>
+      </section>
+
+      {/* ─── FOOTER ───────────────────────────────────────────────────────── */}
+      <footer className="border-t" style={{ borderColor: C.border }}>
+        <div className="mx-auto max-w-[1400px] px-6 py-12 lg:px-12">
+          <div className="grid gap-10 md:grid-cols-4">
+            <div className="md:col-span-2">
+              <div className="flex items-center gap-3">
+                <div
+                  className="flex h-7 w-7 items-center justify-center border"
+                  style={{ borderColor: C.blue }}
+                >
+                  <div className="h-2 w-2" style={{ background: C.blue }} />
+                </div>
+                <span className="text-xl tracking-[0.15em]">VAULTSCAN</span>
+              </div>
+              <p className="mt-4 max-w-sm text-xs leading-relaxed" style={{ color: C.dim }}>
+                Cloud Security Posture Management for teams that need evidence,
+                not buzzwords. Scan · prioritize · prove.
+              </p>
+            </div>
+            <div>
+              <h3 className="mb-4 font-mono text-[9px] tracking-[0.2em]" style={{ color: C.blue }}>
+                PRODUCT
+              </h3>
+              <ul className="space-y-3 font-mono text-[11px]" style={{ color: C.dim }}>
+                <li>
+                  <a href="#features" className="hover:text-[#f2ede6]">
+                    Capabilities
+                  </a>
+                </li>
+                <li>
+                  <a href="#coverage" className="hover:text-[#f2ede6]">
+                    Coverage
+                  </a>
+                </li>
+                <li>
+                  <button type="button" onClick={onEnter} className="hover:text-[#f2ede6]">
+                    Open console
+                  </button>
+                </li>
+              </ul>
+            </div>
+            <div>
+              <h3 className="mb-4 font-mono text-[9px] tracking-[0.2em]" style={{ color: C.blue }}>
+                TRUST
+              </h3>
+              <ul className="space-y-3 font-mono text-[11px]" style={{ color: C.dim }}>
+                <li>
+                  <a href="#security" className="hover:text-[#f2ede6]">
+                    Security model
+                  </a>
+                </li>
+                <li>
+                  <a href="#impact" className="hover:text-[#f2ede6]">
+                    Business impact
+                  </a>
+                </li>
+                <li>
+                  <a href="#why" className="hover:text-[#f2ede6]">
+                    Why VaultScan
+                  </a>
+                </li>
+              </ul>
+            </div>
+          </div>
+          <div
+            className="mt-10 flex flex-col items-center justify-between gap-4 border-t pt-6 md:flex-row"
+            style={{ borderColor: C.border }}
+          >
+            <p className="font-mono text-[10px]" style={{ color: C.dim }}>
+              © 2026 VAULTSCAN · CLOUD SECURITY POSTURE MGMT · ALL RIGHTS RESERVED
+            </p>
+            <div className="flex items-center gap-4">
+              <span className="font-mono text-[10px] tabular-nums" style={{ color: C.dim }}>
+                {utc}
+              </span>
+              <div className="flex items-center gap-2">
+                <span
+                  className="inline-block size-1.5 animate-pulse rounded-full"
+                  style={{ background: C.green }}
+                />
+                <span
+                  className="font-mono text-[10px] tracking-widest"
+                  style={{ color: C.green }}
+                >
+                  ALL_SYSTEMS_OPERATIONAL
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
       </footer>
     </div>
   );
