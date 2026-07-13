@@ -27,10 +27,9 @@ import {
   applyRemediation,
   rollbackRemediation,
   listRemediationJobs,
-  getRemediationReport,
+  downloadFixReportExport,
   type RemediateJob,
   type FixAction,
-  type FixChangeReport,
 } from "@/lib/api";
 import { FixChangeReportPanel } from "./fix-change-report";
 import { cn } from "@/lib/utils";
@@ -224,8 +223,6 @@ export function RemediationHubTab() {
   const [cliScript, setCliScript] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [cliOpen, setCliOpen] = useState(false);
-  const [fixReport, setFixReport] = useState<FixChangeReport | null>(null);
-  const [reportBusy, setReportBusy] = useState(false);
 
   const refreshJobs = useCallback(async () => {
     try {
@@ -364,29 +361,6 @@ export function RemediationHubTab() {
       setError(e instanceof Error ? e.message : "Apply failed");
     } finally {
       setBusy(null);
-    }
-  };
-
-  const generateReport = async () => {
-    if (!job) return;
-    setReportBusy(true);
-    setError(null);
-    try {
-      const res = await getRemediationReport({
-        job_id: job.job_id,
-        use_ai: useAi,
-      });
-      setFixReport(res.report);
-      if (res.report.cli_script) setCliScript(res.report.cli_script);
-      setMessage(
-        res.ai_used
-          ? "Fix change report ready (Cloud Assistant narrative included)."
-          : "Fix change report ready (template summary — enable Assistant notes for AI).",
-      );
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Report generation failed");
-    } finally {
-      setReportBusy(false);
     }
   };
 
@@ -677,12 +651,15 @@ export function RemediationHubTab() {
         )}
       </section>
 
-      {/* Fix change report */}
+      {/* Fix change report — PDF / Word only (readable handoff) */}
       <FixChangeReportPanel
-        report={fixReport}
-        loading={reportBusy}
+        jobId={job?.job_id ?? null}
         canGenerate={!!job}
-        onGenerate={() => void generateReport()}
+        useAi={useAi}
+        onExport={async (format) => {
+          if (!job?.job_id) throw new Error("No job — plan fixes first.");
+          await downloadFixReportExport(format, job.job_id, useAi);
+        }}
       />
 
       <div className="grid gap-5 lg:grid-cols-12">

@@ -30,7 +30,13 @@ from grok_client import (
     summarize_scan,
 )
 import remediation_report
-from report_export import build_report_context, export_docx, export_pdf
+from report_export import (
+    build_report_context,
+    export_docx,
+    export_fix_report_docx,
+    export_fix_report_pdf,
+    export_pdf,
+)
 import remediation_engine
 import scan_persistence
 from scanner_engine import run_scan
@@ -1056,18 +1062,19 @@ class RemediateReportRequest(BaseModel):
     use_ai: bool = True
 
 
-@app.post("/api/remediate/report")
-async def remediate_report(body: RemediateReportRequest):
-    """
-    Fix change report: how it was before, what changed, after state, CLI, AI notes.
-    """
-    job = remediation_engine.get_job(body.job_id)
+async def _build_fix_change_report(job_id: str, *, use_ai: bool = True) -> dict[str, Any]:
+    job = remediation_engine.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Remediation job not found") from None
 
+    # Reuse cached report on job when present and AI preference matches loosely
+    cached = job.get("fix_report")
+    if isinstance(cached, dict) and cached.get("changes") and not use_ai:
+        return cached
+
     report = remediation_report.build_fix_report(job)
     ai_used = False
-    if body.use_ai and settings.grok_api_key:
+    if use_ai and settings.grok_api_key:
         try:
             narrative = await generate_fix_report_narrative(report)
             if narrative.get("executive_summary"):
@@ -1091,13 +1098,54 @@ async def remediate_report(body: RemediateReportRequest):
         except Exception:
             pass
     report["ai_used"] = ai_used
-    # persist on job for reopen
     try:
         job["fix_report"] = report
         remediation_engine._upsert_job(job)
     except Exception:
         pass
-    return {"ok": True, "report": report, "ai_used": ai_used}
+    return report
+
+
+@app.post("/api/remediate/report")
+async def remediate_report(body: RemediateReportRequest):
+    """
+    Fix change report (JSON): before / what changed / after, CLI, AI notes.
+    Prefer PDF/DOCX export endpoints for readable handoff.
+    """
+    report = await _build_fix_change_report(body.job_id, use_ai=body.use_ai)
+    return {"ok": True, "report": report, "ai_used": bool(report.get("ai_used"))}
+
+
+@app.get("/api/remediate/report/export/pdf")
+async def export_fix_report_pdf_api(
+    job_id: str = Query(...),
+    use_ai: bool = Query(default=True),
+):
+    """Download remediation change report as PDF."""
+    report = await _build_fix_change_report(job_id, use_ai=use_ai)
+    data = export_fix_report_pdf(report)
+    filename = f"VaultScan_FixReport_{report.get('job_id') or job_id}.pdf"
+    return Response(
+        content=data,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/api/remediate/report/export/docx")
+async def export_fix_report_docx_api(
+    job_id: str = Query(...),
+    use_ai: bool = Query(default=True),
+):
+    """Download remediation change report as Word (.docx)."""
+    report = await _build_fix_change_report(job_id, use_ai=use_ai)
+    data = export_fix_report_docx(report)
+    filename = f"VaultScan_FixReport_{report.get('job_id') or job_id}.docx"
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.get("/api/remediate/jobs/{job_id}")

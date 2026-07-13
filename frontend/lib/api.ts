@@ -617,6 +617,46 @@ export function getRemediationReport(body: {
   });
 }
 
+/** Download fix change report as PDF or Word (full before/after + CLI + AI). */
+export async function downloadFixReportExport(
+  format: "pdf" | "docx",
+  jobId: string,
+  useAi = true,
+): Promise<void> {
+  const params = new URLSearchParams({
+    job_id: jobId,
+    use_ai: useAi ? "true" : "false",
+  });
+  const res = await fetch(
+    `${process.env.NEXT_PUBLIC_API_BASE ?? ""}/api/remediate/report/export/${format}?${params}`,
+  );
+  if (!res.ok) {
+    let msg = `Export failed (${res.status})`;
+    try {
+      const err = await res.json();
+      if (typeof err?.detail === "string") msg = err.detail;
+      else if (err?.detail?.error) msg = err.detail.error;
+    } catch {
+      /* ignore */
+    }
+    throw new Error(msg);
+  }
+  const blob = await res.blob();
+  const dispo = res.headers.get("Content-Disposition") || "";
+  const match = /filename="?([^";]+)"?/i.exec(dispo);
+  const filename =
+    match?.[1] ||
+    `VaultScan_FixReport.${format === "pdf" ? "pdf" : "docx"}`;
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 export function planRemediation(body: {
   scan_id?: string | null;
   finding_ids?: string[];

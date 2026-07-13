@@ -1014,3 +1014,253 @@ def export_docx(ctx: dict[str, Any]) -> bytes:
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()
+
+
+# ─── Fix change report (remediation) PDF / DOCX ───────────────────────────────
+
+def export_fix_report_pdf(report: dict[str, Any]) -> bytes:
+    """Professional PDF: before → changed → after, CLI, AI summary."""
+    buf = io.BytesIO()
+    margin = 14 * mm
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=A4,
+        leftMargin=margin,
+        rightMargin=margin,
+        topMargin=14 * mm,
+        bottomMargin=14 * mm,
+        title=f"VaultScan Fix Report {report.get('job_id') or ''}",
+        author="VaultScan Cloud Assistant",
+    )
+    styles = _styles()
+    story: list[Any] = []
+    counts = report.get("counts") or {}
+    job_id = _safe(report.get("job_id"), 40)
+    delta = report.get("score_delta")
+    delta_s = "—" if delta is None else f"{delta:+}"
+
+    story.append(Paragraph("REMEDIATION CHANGE REPORT", styles["VSTitle"]))
+    story.append(
+        Paragraph(
+            "How the environment looked <b>before</b>, what VaultScan <b>changed</b>, "
+            "and the expected state <b>after</b> — with CLI and Cloud Assistant notes.",
+            styles["VSBody"],
+        )
+    )
+    story.append(
+        Paragraph(
+            f"Report <b>{_escape(_safe(report.get('report_id'), 48))}</b>  ·  "
+            f"Job <b>{_escape(job_id)}</b>  ·  Status {_escape(_safe(report.get('job_status'), 24))}<br/>"
+            f"Score before <b>{_escape(str(report.get('score_before') if report.get('score_before') is not None else '—'))}</b>  →  "
+            f"after <b>{_escape(str(report.get('score_after') if report.get('score_after') is not None else '—'))}</b>  "
+            f"(Δ {_escape(delta_s)})<br/>"
+            f"Applied {counts.get('applied', 0)}  ·  Failed {counts.get('failed', 0)}  ·  "
+            f"Skipped {counts.get('skipped', 0)}  ·  Restored {counts.get('rolled_back', 0)}  ·  "
+            f"Total {counts.get('total', 0)}<br/>"
+            f"Generated {_utc_now()}"
+            + (" · Cloud Assistant" if report.get("ai_used") else ""),
+            styles["VSSub"],
+        )
+    )
+    story.append(
+        HRFlowable(
+            width="100%", thickness=1.5, color=colors.HexColor("#3874ff"), spaceAfter=10
+        )
+    )
+
+    story.append(Paragraph("1. Executive summary", styles["VSH2"]))
+    story.append(
+        Paragraph(_escape(_safe(report.get("executive_summary"), 4000)), styles["VSBody"])
+    )
+    story.append(Spacer(1, 6))
+
+    recs = report.get("recommendations") or []
+    if recs:
+        story.append(Paragraph("2. Recommendations", styles["VSH2"]))
+        for r in recs:
+            story.append(Paragraph(f"• {_escape(_safe(r, 500))}", styles["VSBody"]))
+        story.append(Spacer(1, 6))
+
+    story.append(Paragraph("3. Detailed changes (before → after)", styles["VSH2"]))
+    story.append(
+        Paragraph(
+            "Each item shows the pre-change snapshot, what the job did, expected result, "
+            "and paste-ready AWS CLI.",
+            styles["VSHint"],
+        )
+    )
+    story.append(Spacer(1, 4))
+
+    for i, ch in enumerate(report.get("changes") or [], 1):
+        rid = _safe(ch.get("rule_id"), 40)
+        res = _safe(ch.get("resource"), 80)
+        status = _safe(ch.get("status"), 24)
+        risk = _safe(ch.get("risk"), 16)
+        block: list[Any] = [
+            Paragraph(
+                f"<b>{i}. {_escape(rid)}</b>  ·  {_escape(status)}  ·  risk {_escape(risk)}",
+                styles["VSH2"],
+            ),
+            Paragraph(
+                f"Resource: <font face='Courier' size='8'>{_escape(res)}</font>",
+                styles["VSHint"],
+            ),
+            Paragraph(f"<b>{_escape(_safe(ch.get('title') or ch.get('summary'), 200))}</b>", styles["VSBody"]),
+        ]
+        if ch.get("ai_story") or ch.get("ai_notes"):
+            block.append(
+                Paragraph(
+                    f"<b>Cloud Assistant:</b> {_escape(_safe(ch.get('ai_story') or ch.get('ai_notes'), 1200))}",
+                    styles["VSBody"],
+                )
+            )
+        block.append(Paragraph("<b>BEFORE</b>", styles["VSSmall"]))
+        block.append(Paragraph(_escape(_safe(ch.get("before"), 2500)), styles["VSHint"]))
+        block.append(Paragraph("<b>WHAT CHANGED</b>", styles["VSSmall"]))
+        block.append(Paragraph(_escape(_safe(ch.get("what_changed"), 1500)), styles["VSBody"]))
+        if ch.get("error"):
+            block.append(
+                Paragraph(
+                    f"<font color='#ff3d57'><b>Error:</b> {_escape(_safe(ch.get('error'), 800))}</font>",
+                    styles["VSBody"],
+                )
+            )
+        block.append(Paragraph("<b>AFTER</b>", styles["VSSmall"]))
+        block.append(Paragraph(_escape(_safe(ch.get("after"), 1500)), styles["VSBody"]))
+        cli = ch.get("cli_text") or "\n".join(ch.get("cli_commands") or [])
+        if cli:
+            block.append(Paragraph("<b>CLI</b>", styles["VSSmall"]))
+            block.append(
+                Paragraph(
+                    f"<font face='Courier' size='7'>{_escape(_safe(cli, 2000))}</font>",
+                    styles["VSHint"],
+                )
+            )
+        block.append(Spacer(1, 8))
+        story.append(KeepTogether(block))
+
+    full_cli = report.get("cli_script") or ""
+    if full_cli:
+        story.append(PageBreak())
+        story.append(Paragraph("4. Full CLI script (copy / paste)", styles["VSH2"]))
+        story.append(
+            Paragraph(
+                "Run with credentials for the same lab account as your Settings Role ARN.",
+                styles["VSHint"],
+            )
+        )
+        # chunk long CLI
+        chunk = _safe(full_cli, 12000)
+        for part in chunk.split("\n"):
+            story.append(
+                Paragraph(
+                    f"<font face='Courier' size='7'>{_escape(part) if part else '&nbsp;'}</font>",
+                    styles["VSHint"],
+                )
+            )
+
+    story.append(Spacer(1, 12))
+    story.append(
+        Paragraph(
+            "VaultScan · Remediation Change Report · Confidential",
+            styles["VSCenter"],
+        )
+    )
+    doc.build(story)
+    return buf.getvalue()
+
+
+def export_fix_report_docx(report: dict[str, Any]) -> bytes:
+    """Word document version of the fix change report."""
+    doc = Document()
+    for section in doc.sections:
+        section.top_margin = Inches(0.65)
+        section.bottom_margin = Inches(0.65)
+        section.left_margin = Inches(0.75)
+        section.right_margin = Inches(0.75)
+
+    title = doc.add_heading("Remediation Change Report", level=0)
+    title.alignment = WD_ALIGN_PARAGRAPH.LEFT
+
+    counts = report.get("counts") or {}
+    delta = report.get("score_delta")
+    delta_s = "—" if delta is None else f"{delta:+}"
+
+    meta = doc.add_paragraph()
+    meta.add_run(
+        f"Report: {report.get('report_id')}  ·  Job: {report.get('job_id')}  ·  "
+        f"Status: {report.get('job_status')}\n"
+        f"Score: {report.get('score_before')} → {report.get('score_after')} (Δ {delta_s})\n"
+        f"Applied {counts.get('applied', 0)} · Failed {counts.get('failed', 0)} · "
+        f"Skipped {counts.get('skipped', 0)} · Total {counts.get('total', 0)}\n"
+        f"Generated {_utc_now()}"
+        + (" · Cloud Assistant" if report.get("ai_used") else "")
+    ).font.size = Pt(9)
+
+    doc.add_heading("1. Executive summary", level=1)
+    doc.add_paragraph(_safe(report.get("executive_summary"), 5000))
+
+    recs = report.get("recommendations") or []
+    if recs:
+        doc.add_heading("2. Recommendations", level=1)
+        for r in recs:
+            doc.add_paragraph(_safe(r, 800), style="List Bullet")
+
+    doc.add_heading("3. Detailed changes (before → after)", level=1)
+    for i, ch in enumerate(report.get("changes") or [], 1):
+        doc.add_heading(
+            f"{i}. {_safe(ch.get('rule_id'), 40)} — {_safe(ch.get('status'), 24)}",
+            level=2,
+        )
+        p = doc.add_paragraph()
+        p.add_run(f"Resource: ").bold = True
+        p.add_run(_safe(ch.get("resource"), 120)).font.name = "Courier New"
+        if ch.get("title") or ch.get("summary"):
+            doc.add_paragraph(_safe(ch.get("title") or ch.get("summary"), 300))
+        if ch.get("ai_story") or ch.get("ai_notes"):
+            ap = doc.add_paragraph()
+            ap.add_run("Cloud Assistant: ").bold = True
+            ap.add_run(_safe(ch.get("ai_story") or ch.get("ai_notes"), 1500))
+
+        for label, key in (
+            ("BEFORE", "before"),
+            ("WHAT CHANGED", "what_changed"),
+            ("AFTER", "after"),
+        ):
+            h = doc.add_paragraph()
+            h.add_run(label).bold = True
+            doc.add_paragraph(_safe(ch.get(key), 3000))
+
+        if ch.get("error"):
+            ep = doc.add_paragraph()
+            run = ep.add_run("Error: " + _safe(ch.get("error"), 1000))
+            run.font.color.rgb = RGBColor(0xC0, 0x30, 0x30)
+
+        cli = ch.get("cli_text") or "\n".join(ch.get("cli_commands") or [])
+        if cli:
+            cp = doc.add_paragraph()
+            cp.add_run("CLI").bold = True
+            cli_p = doc.add_paragraph(_safe(cli, 4000))
+            for run in cli_p.runs:
+                run.font.name = "Courier New"
+                run.font.size = Pt(8)
+
+    full_cli = report.get("cli_script") or ""
+    if full_cli:
+        doc.add_heading("4. Full CLI script", level=1)
+        doc.add_paragraph(
+            "Run with credentials for the same lab account as your Settings Role ARN."
+        )
+        cli_p = doc.add_paragraph(_safe(full_cli, 15000))
+        for run in cli_p.runs:
+            run.font.name = "Courier New"
+            run.font.size = Pt(8)
+
+    foot = doc.add_paragraph()
+    foot.add_run(
+        "VaultScan · Remediation Change Report · Confidential"
+    ).font.size = Pt(8)
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
