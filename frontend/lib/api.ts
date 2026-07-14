@@ -3,6 +3,8 @@
  * In dev, Next.js rewrites /api/* → http://localhost:8000/api/*
  */
 
+import { getToken } from "@/lib/auth";
+
 export type Severity = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
 export type ScanMode = "assume_role" | "direct" | "simulate";
 
@@ -159,7 +161,10 @@ export interface ConnectionSettingsUpdate {
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
 
-/** Browser-session copy of AWS secrets so Apply works after Vercel cold starts. */
+/**
+ * Cloud credentials kept in localStorage so users do not re-type AWS keys
+ * every visit (also mirrored on the server via Settings save).
+ */
 const CREDS_KEY = "vaultscan_aws_creds_v1";
 
 export type StoredAwsCreds = {
@@ -172,8 +177,18 @@ export type StoredAwsCreds = {
   external_id?: string;
 };
 
+function _credsStorage(): Storage | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return localStorage;
+  } catch {
+    return null;
+  }
+}
+
 export function rememberAwsCreds(partial: StoredAwsCreds) {
-  if (typeof window === "undefined") return;
+  const store = _credsStorage();
+  if (!store) return;
   try {
     const prev = loadAwsCreds() || {};
     const next: StoredAwsCreds = { ...prev };
@@ -182,7 +197,13 @@ export function rememberAwsCreds(partial: StoredAwsCreds) {
         (next as Record<string, string>)[k] = String(v).trim();
       }
     }
-    sessionStorage.setItem(CREDS_KEY, JSON.stringify(next));
+    store.setItem(CREDS_KEY, JSON.stringify(next));
+    // migrate off sessionStorage if present
+    try {
+      sessionStorage.removeItem(CREDS_KEY);
+    } catch {
+      /* ignore */
+    }
   } catch {
     /* ignore quota / private mode */
   }
@@ -191,9 +212,15 @@ export function rememberAwsCreds(partial: StoredAwsCreds) {
 export function loadAwsCreds(): StoredAwsCreds | null {
   if (typeof window === "undefined") return null;
   try {
-    const raw = sessionStorage.getItem(CREDS_KEY);
+    const raw =
+      localStorage.getItem(CREDS_KEY) || sessionStorage.getItem(CREDS_KEY);
     if (!raw) return null;
-    return JSON.parse(raw) as StoredAwsCreds;
+    const parsed = JSON.parse(raw) as StoredAwsCreds;
+    // upgrade session → local so next visits keep keys
+    if (!localStorage.getItem(CREDS_KEY) && sessionStorage.getItem(CREDS_KEY)) {
+      localStorage.setItem(CREDS_KEY, raw);
+    }
+    return parsed;
   } catch {
     return null;
   }
@@ -202,10 +229,21 @@ export function loadAwsCreds(): StoredAwsCreds | null {
 export function clearAwsCreds() {
   if (typeof window === "undefined") return;
   try {
+    localStorage.removeItem(CREDS_KEY);
     sessionStorage.removeItem(CREDS_KEY);
   } catch {
     /* ignore */
   }
+}
+
+function authHeaders(): Record<string, string> {
+  try {
+    const token = getToken();
+    if (token) return { Authorization: `Bearer ${token}` };
+  } catch {
+    /* ignore */
+  }
+  return {};
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -213,6 +251,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
     headers: {
       "Content-Type": "application/json",
+      ...authHeaders(),
       ...(init?.headers || {}),
     },
   });
@@ -249,6 +288,60 @@ export function getHealth() {
     default_role_arn: string;
     region: string;
   }>("/api/health");
+}
+
+/* ─── Auth ──────────────────────────────────────────────────────────────── */
+
+export type LoginResponse = {
+  ok: boolean;
+  message: string;
+  token: string;
+  username: string;
+  display_name: string;
+  role?: string;
+  expires_at?: string;
+  remember?: boolean;
+};
+
+export function getAuthInfo() {
+  return request<{
+    auth_required: boolean;
+    hint?: string;
+    remember_days?: number;
+  }>("/api/auth/info");
+}
+
+export function loginRequest(body: {
+  username: string;
+  password: string;
+  remember?: boolean;
+}) {
+  return request<LoginResponse>("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({
+      username: body.username,
+      password: body.password,
+      remember: body.remember !== false,
+    }),
+  });
+}
+
+export function authMe() {
+  return request<{
+    ok: boolean;
+    username: string;
+    display_name: string;
+    role?: string;
+    expires_at?: string;
+    remember?: boolean;
+  }>("/api/auth/me");
+}
+
+export function logoutRequest() {
+  return request<{ ok: boolean; message: string }>("/api/auth/logout", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
 }
 
 export function getPublicConfig() {

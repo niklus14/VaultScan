@@ -27,6 +27,7 @@ import {
   clearConnectionCredentials,
   rememberAwsCreds,
   clearAwsCreds,
+  loadAwsCreds,
   getScheduleSettings,
   saveScheduleSettings,
   runScheduleNow,

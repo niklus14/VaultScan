@@ -1,24 +1,80 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { Landing } from "@/components/cspm/landing";
 import { Dashboard } from "@/components/cspm/dashboard";
+import { LoginPage } from "@/components/cspm/login";
+import { authMe } from "@/lib/api";
+import { clearSession, getToken, getStoredUser } from "@/lib/auth";
 
-type View = "landing" | "transition" | "dashboard";
+type View = "loading" | "login" | "landing" | "transition" | "dashboard";
 
 export default function Page() {
-  const [view, setView] = useState<View>("landing");
+  const [view, setView] = useState<View>("loading");
+
+  useEffect(() => {
+    let cancelled = false;
+    const boot = async () => {
+      const token = getToken();
+      if (!token) {
+        if (!cancelled) setView("login");
+        return;
+      }
+      try {
+        await authMe();
+        if (!cancelled) setView("landing");
+      } catch {
+        clearSession();
+        if (!cancelled) setView("login");
+      }
+    };
+    void boot();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const enterDashboard = useCallback(() => {
     setView("transition");
-    // Let wipe animation play, then mount dashboard
     window.setTimeout(() => setView("dashboard"), 900);
   }, []);
+
+  const onLoginSuccess = useCallback(() => {
+    setView("landing");
+  }, []);
+
+  const onLogout = useCallback(() => {
+    clearSession();
+    setView("login");
+  }, []);
+
+  if (view === "loading") {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-3 bg-background">
+        <div className="size-10 animate-pulse rounded-lg bg-accent-blue/30" />
+        <p className="font-mono text-[10px] tracking-[0.24em] text-muted-foreground">
+          CHECKING SESSION…
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="relative min-h-screen bg-background">
       <AnimatePresence mode="wait">
+        {view === "login" && (
+          <motion.div
+            key="login"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.35 }}
+          >
+            <LoginPage onSuccess={onLoginSuccess} />
+          </motion.div>
+        )}
+
         {view === "landing" && (
           <motion.div
             key="landing"
@@ -40,7 +96,6 @@ export default function Page() {
             exit={{ opacity: 0 }}
             transition={{ duration: 0.25 }}
           >
-            {/* Expanding rings */}
             <motion.div
               className="absolute size-24 rounded-full border border-accent-blue/40"
               initial={{ scale: 0.4, opacity: 1 }}
@@ -53,7 +108,6 @@ export default function Page() {
               animate={{ scale: 10, opacity: 0 }}
               transition={{ duration: 0.95, delay: 0.08, ease: [0.22, 1, 0.36, 1] }}
             />
-            {/* Horizontal wipe */}
             <motion.div
               className="absolute inset-y-0 left-0 w-full bg-gradient-to-r from-accent-blue/20 via-panel to-background"
               initial={{ x: "-100%" }}
@@ -86,7 +140,9 @@ export default function Page() {
                 VAULTSCAN
               </p>
               <p className="font-mono text-[10px] tracking-[0.2em] text-muted-foreground">
-                INITIALIZING CONSOLE…
+                {getStoredUser()?.display_name
+                  ? `WELCOME ${getStoredUser()?.display_name?.toUpperCase()}`
+                  : "INITIALIZING CONSOLE…"}
               </p>
               <div className="mt-2 h-0.5 w-40 overflow-hidden rounded-full bg-border">
                 <motion.div
@@ -108,7 +164,7 @@ export default function Page() {
             transition={{ duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
             className="min-h-screen"
           >
-            <Dashboard />
+            <Dashboard onLogout={onLogout} />
           </motion.div>
         )}
       </AnimatePresence>

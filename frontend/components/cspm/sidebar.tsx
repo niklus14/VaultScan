@@ -5,18 +5,24 @@ import {
   Loader2,
   Settings2,
   Link2,
+  LogOut,
 } from "lucide-react";
 import { NAV_ITEMS, type TabId } from "./data";
 import { useLiveData } from "@/lib/scan-store";
 import { BrandCloud } from "./brand-cloud";
 import { cn } from "@/lib/utils";
+import { getStoredUser } from "@/lib/auth";
+import { logoutRequest } from "@/lib/api";
+import { clearSession } from "@/lib/auth";
 
 export function Sidebar({
   active,
   onSelect,
+  onLogout,
 }: {
   active: TabId;
   onSelect: (id: TabId) => void;
+  onLogout?: () => void;
 }) {
   const {
     launchScan,
@@ -178,6 +184,30 @@ export function Sidebar({
               </button>
             </p>
           )}
+
+          <div className="mt-3 border-t border-border pt-3">
+            <p className="mb-2 truncate px-1 font-mono text-[10px] text-muted-foreground">
+              {getStoredUser()?.display_name || getStoredUser()?.username || "Operator"}
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                void (async () => {
+                  try {
+                    await logoutRequest();
+                  } catch {
+                    /* still clear local session */
+                  }
+                  clearSession();
+                  onLogout?.();
+                })();
+              }}
+              className="flex w-full items-center justify-center gap-1.5 rounded border border-border bg-background px-2 py-1.5 font-mono text-[10px] font-bold tracking-wider text-muted-foreground transition hover:border-danger/40 hover:text-danger"
+            >
+              <LogOut className="size-3" />
+              SIGN OUT
+            </button>
+          </div>
         </div>
 
       </nav>

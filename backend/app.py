@@ -13,13 +13,14 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from typing import Any, Literal
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from aws_client import get_remediate_session, get_scan_session, probe_connection
 from config import settings
+import auth_store
 import connection_store
 from grok_client import (
     GrokError,
@@ -81,6 +82,12 @@ class ScanRequest(BaseModel):
     role_arn: str | None = None
     external_id: str | None = None
     region: str | None = None
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+    remember: bool = True
 
 
 class ChatMessage(BaseModel):
@@ -279,6 +286,54 @@ def health():
         "ready_to_scan": view.get("ready_to_scan"),
         "scans_cached": len(scan_history),
     }
+
+
+# ── Login / session ────────────────────────────────────────────────────────
+
+
+@app.get("/api/auth/info")
+def auth_info():
+    return auth_store.public_auth_info()
+
+
+@app.post("/api/auth/login")
+def auth_login(body: LoginRequest):
+    try:
+        session = auth_store.login(
+            body.username,
+            body.password,
+            remember=body.remember,
+        )
+        return {"ok": True, "message": "Signed in.", **session}
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+
+@app.get("/api/auth/me")
+def auth_me(authorization: str | None = Header(default=None)):
+    token = None
+    if authorization and authorization.lower().startswith("bearer "):
+        token = authorization[7:].strip()
+    sess = auth_store.validate_token(token)
+    if not sess:
+        raise HTTPException(status_code=401, detail="Not signed in.")
+    return {
+        "ok": True,
+        "username": sess.get("username"),
+        "display_name": sess.get("display_name"),
+        "role": sess.get("role"),
+        "expires_at": sess.get("expires_at"),
+        "remember": sess.get("remember"),
+    }
+
+
+@app.post("/api/auth/logout")
+def auth_logout(authorization: str | None = Header(default=None)):
+    token = None
+    if authorization and authorization.lower().startswith("bearer "):
+        token = authorization[7:].strip()
+    auth_store.logout(token)
+    return {"ok": True, "message": "Signed out."}
 
 
 # ─── Settings: Cloud Connection ───────────────────────────────────────────────

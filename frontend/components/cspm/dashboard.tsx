@@ -53,7 +53,7 @@ function useClock() {
   return time;
 }
 
-export function Dashboard() {
+export function Dashboard({ onLogout }: { onLogout?: () => void } = {}) {
   const [active, setActive] = useState<TabId>("overview");
   const [reportOpen, setReportOpen] = useState(false);
   const time = useClock();
@@ -78,7 +78,7 @@ export function Dashboard() {
   return (
     <div className="flex h-screen w-full overflow-hidden bg-background">
       <div className="hidden w-[260px] shrink-0 lg:block">
-        <Sidebar active={active} onSelect={setActive} />
+        <Sidebar active={active} onSelect={setActive} onLogout={onLogout} />
       </div>
 
       <main className="flex min-w-0 flex-1 flex-col">
