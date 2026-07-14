@@ -7,7 +7,9 @@
   },
   "scripts": {
     "build": "next build",
-    "dev": "next dev",
+    "dev": "node scripts/dev.mjs",
+    "dev:clean": "node scripts/dev.mjs --clean",
+    "dev:turbo": "next dev --turbopack",
     "lint": "eslint .",
     "start": "next start"
   },

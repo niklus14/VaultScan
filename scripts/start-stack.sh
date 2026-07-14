@@ -25,4 +25,9 @@ cd "$ROOT/frontend"
 if [[ ! -d node_modules ]]; then
   npm install
 fi
+# Prefer stable webpack path; clears broken Turbopack cache if present
+if [[ -f .next/dev/build-manifest.json ]] || [[ -d .next/dev/cache/turbopack ]]; then
+  echo "==> Clearing previous Turbopack/dev cache (.next)"
+  rm -rf .next
+fi
 npm run dev
