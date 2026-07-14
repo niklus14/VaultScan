@@ -1034,7 +1034,7 @@ export function SettingsTab() {
                 Enable Gmail alerts
               </span>
               <span className="mt-0.5 block text-[11px] text-muted-foreground">
-                Send a summary email after scheduled scans.
+                Email after Launch active scan and scheduled checks (by alert rule).
               </span>
             </span>
           </label>
