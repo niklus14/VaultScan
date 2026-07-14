@@ -498,15 +498,26 @@ def _execute_scan_for_scheduler() -> dict[str, Any]:
 
 @app.post("/api/scan")
 def api_scan(body: ScanRequest | None = None):
-    """Run a scan using Settings credentials (body fields optional overrides)."""
+    """Run a scan using Settings credentials (body fields optional overrides).
+
+    If Gmail alerts are enabled (Settings → schedule), also emails the report
+    after Launch active scan — same path as Run check now / hourly schedule.
+    """
     try:
         body = body or ScanRequest()
-        return _execute_scan(
+        result = _execute_scan(
             mode=body.mode,
             role_arn=body.role_arn,
             external_id=body.external_id,
             region=body.region,
         )
+        # Same alert pipeline as scheduled scans (does not fail the scan)
+        email_info = email_alerts.maybe_alert_after_scan(
+            result, source="launch_active_scan"
+        )
+        if email_info is not None:
+            result = {**result, "email_alert": email_info}
+        return result
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001

@@ -998,9 +998,11 @@ export function SettingsTab() {
           </h4>
         </div>
         <p className="mb-4 max-w-2xl text-[11px] leading-relaxed text-muted-foreground">
-          Automatically re-check the cloud on a timer (for example every hour).
-          Alerts are sent from <span className="text-foreground">VaultScan Company</span> —
-          you only enter <span className="text-foreground">your own Gmail</span> to receive them.
+          Automatically re-check the cloud on a timer, and email after{" "}
+          <span className="text-foreground">Launch active scan</span> as well as
+          scheduled runs. Alerts are sent as{" "}
+          <span className="text-foreground">VaultScan Company</span> — you only enter
+          your Gmail to receive them.
         </p>
 
         <div className="mb-4 grid gap-3 sm:grid-cols-2">

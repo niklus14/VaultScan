@@ -71,7 +71,6 @@ def run_scheduled_scan(*, reason: str = "manual") -> dict[str, Any]:
         return {"ok": False, "message": "A scheduled scan is already running."}
 
     try:
-        profile = schedule_store.load()
         try:
             scan = _scan_fn()
         except Exception as exc:  # noqa: BLE001
@@ -84,24 +83,9 @@ def run_scheduled_scan(*, reason: str = "manual") -> dict[str, Any]:
         msg = f"Scan OK ({reason}): score={score}, findings={total}"
         schedule_store.record_run(status="ok", message=msg)
 
-        email_result: dict[str, Any] | None = None
-        if profile.get("email_enabled"):
-            alert_when = profile.get("alert_when") or "high_or_critical"
-            if schedule_store.should_send_alert(scan, alert_when):
-                try:
-                    # reload secrets after record_run
-                    full = schedule_store.load()
-                    note = email_alerts.send_scan_alert(scan, full)
-                    schedule_store.record_email(status="ok", message=note)
-                    email_result = {"ok": True, "message": note}
-                except Exception as exc:  # noqa: BLE001
-                    em = f"Email failed: {exc}"
-                    schedule_store.record_email(status="failed", message=em)
-                    email_result = {"ok": False, "message": em}
-            else:
-                skip = f"Email skipped (alert rule: {alert_when})"
-                schedule_store.record_email(status="skipped", message=skip)
-                email_result = {"ok": True, "message": skip, "skipped": True}
+        email_result = email_alerts.maybe_alert_after_scan(
+            scan, source=f"schedule:{reason}"
+        )
 
         return {
             "ok": True,

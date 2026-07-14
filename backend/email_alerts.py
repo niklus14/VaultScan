@@ -227,6 +227,61 @@ def _system_sender() -> dict[str, Any]:
     }
 
 
+def maybe_alert_after_scan(
+    scan: dict[str, Any],
+    *,
+    source: str = "scan",
+) -> dict[str, Any] | None:
+    """
+    If Gmail alerts are enabled in Settings, email the report for this scan.
+
+    Used by:
+      • Launch active scan  (POST /api/scan)
+      • Run check now / scheduled interval
+
+    Never raises — scan success must not depend on mail delivery.
+    """
+    import schedule_store
+
+    try:
+        profile = schedule_store.load()
+    except Exception:  # noqa: BLE001
+        return None
+
+    if not profile.get("email_enabled"):
+        return None
+
+    recipients = schedule_store.parse_recipients(profile.get("recipients"))
+    if not recipients:
+        note = "Email skipped: no recipient Gmail saved in Settings."
+        try:
+            schedule_store.record_email(status="skipped", message=note)
+        except Exception:  # noqa: BLE001
+            pass
+        return {"ok": False, "skipped": True, "message": note, "source": source}
+
+    alert_when = profile.get("alert_when") or "high_or_critical"
+    if not schedule_store.should_send_alert(scan, alert_when):
+        note = f"Email skipped (alert rule: {alert_when}; source={source})"
+        try:
+            schedule_store.record_email(status="skipped", message=note)
+        except Exception:  # noqa: BLE001
+            pass
+        return {"ok": True, "skipped": True, "message": note, "source": source}
+
+    try:
+        note = send_scan_alert(scan, profile)
+        schedule_store.record_email(status="ok", message=f"{note} [{source}]")
+        return {"ok": True, "message": note, "source": source}
+    except Exception as exc:  # noqa: BLE001
+        em = f"Email failed: {exc}"
+        try:
+            schedule_store.record_email(status="failed", message=em)
+        except Exception:  # noqa: BLE001
+            pass
+        return {"ok": False, "message": em, "source": source}
+
+
 def send_scan_alert(scan: dict[str, Any], profile: dict[str, Any]) -> str:
     from schedule_store import parse_recipients
 
