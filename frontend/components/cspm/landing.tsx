@@ -277,11 +277,11 @@ function RotatingWord({ words }: { words: readonly string[] }) {
   }, [words.length]);
 
   return (
-    <div className="relative overflow-hidden h-[clamp(3.5rem,12vw,10rem)] leading-[0.88]">
+    <div className="relative overflow-hidden h-[clamp(2.75rem,9vw,7.25rem)] leading-[0.88]">
       <AnimatePresence mode="wait">
         <motion.h1
           key={words[i]}
-          className="font-display absolute inset-0 text-[clamp(3.5rem,12vw,10rem)] font-bold uppercase leading-[0.88] tracking-tight text-[#2196f3]"
+          className="font-display absolute inset-0 text-[clamp(2.75rem,9vw,7.25rem)] font-bold uppercase leading-[0.88] tracking-tight text-[#2196f3]"
           style={{ fontFamily: "var(--font-space-grotesk), system-ui, sans-serif" }}
           initial={{ y: "110%", opacity: 0 }}
           animate={{ y: "0%", opacity: 1 }}
@@ -293,7 +293,7 @@ function RotatingWord({ words }: { words: readonly string[] }) {
       </AnimatePresence>
       {/* reserve space so layout doesn't jump */}
       <h1
-        className="invisible text-[clamp(3.5rem,12vw,10rem)] font-bold uppercase leading-[0.88]"
+        className="invisible text-[clamp(2.75rem,9vw,7.25rem)] font-bold uppercase leading-[0.88]"
         aria-hidden
       >
         {words.reduce((a, b) => (a.length >= b.length ? a : b))}
@@ -626,14 +626,14 @@ export function Landing({ onEnter }: { onEnter: () => void }) {
 
             {/* Three-line hero with rotating middle — THE impact piece */}
             <h1
-              className="text-[clamp(3.5rem,12vw,10rem)] font-bold uppercase leading-[0.88] tracking-tight text-[#f2ede6]"
+              className="text-[clamp(2.75rem,9vw,7.25rem)] font-bold uppercase leading-[0.88] tracking-tight text-[#f2ede6]"
               style={{ fontFamily: "var(--font-space-grotesk), system-ui" }}
             >
               CLOUDS THAT
             </h1>
             <RotatingWord words={HERO_WORDS} />
             <h1
-              className="text-[clamp(3.5rem,12vw,10rem)] font-bold uppercase leading-[0.88] tracking-tight text-[#f2ede6]"
+              className="text-[clamp(2.75rem,9vw,7.25rem)] font-bold uppercase leading-[0.88] tracking-tight text-[#f2ede6]"
               style={{ fontFamily: "var(--font-space-grotesk), system-ui" }}
             >
               THEMSELVES
