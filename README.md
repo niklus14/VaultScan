@@ -41,6 +41,10 @@ Or: `./scripts/start-stack.sh`
 2. **Launch active scan**  
 3. Review Overview / Findings / Attack Paths  
 4. **Generate Report** → PDF / Word  
+5. Optional: **Settings → Scheduled checks & Gmail alerts** (hourly auto-scan + email report)  
+
+> Scheduled scans need the **backend process running** (local API). On pure serverless (Vercel) use **Run check now** or an external cron to `POST /api/settings/schedule/run-now`.  
+> Gmail needs an [App Password](https://myaccount.google.com/apppasswords) (not your normal login password).
 
 ## Deploy on Vercel (GitHub)
 

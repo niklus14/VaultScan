@@ -10,6 +10,7 @@ FastAPI backend for the cspm-dashboard-design frontend.
 """
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Query
@@ -40,11 +41,27 @@ from report_export import (
 import remediation_engine
 import scan_persistence
 from scanner_engine import run_scan
+import schedule_store
+import scheduler as scan_scheduler
+import email_alerts
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # Background hourly (or custom) scans while API process is alive
+    scan_scheduler.start(_execute_scan_for_scheduler)
+    yield
+    scan_scheduler.stop()
+
 
 app = FastAPI(
     title="VaultScan CSPM API",
-    version="1.3.0",
-    description="Cloud connection settings, real AWS scanning, Cloud Assistant, AI remediation",
+    version="1.4.0",
+    description=(
+        "Cloud connection settings, real AWS scanning, Cloud Assistant, "
+        "AI remediation, scheduled scans + Gmail alerts"
+    ),
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -110,6 +127,36 @@ class ConnectionSettingsUpdate(BaseModel):
     )
     clear_credentials: bool = False
     clear_session_token: bool = False
+
+
+class ScheduleSettingsUpdate(BaseModel):
+    enabled: bool | None = None
+    interval_minutes: int | None = Field(
+        default=None,
+        description="How often to auto-scan (e.g. 60 = every hour).",
+    )
+    email_enabled: bool | None = None
+    recipients: str | None = Field(
+        default=None,
+        description="Comma-separated Gmail / email recipients for alerts.",
+    )
+    gmail_address: str | None = Field(
+        default=None,
+        description="Sender Gmail address (SMTP login).",
+    )
+    gmail_app_password: str | None = Field(
+        default=None,
+        description="Gmail App Password. Leave empty to keep existing.",
+    )
+    smtp_host: str | None = None
+    smtp_port: int | None = None
+    alert_when: Literal[
+        "always",
+        "any_findings",
+        "high_or_critical",
+        "critical_only",
+    ] | None = None
+    include_finding_details: bool | None = None
 
 
 def _find_scan(scan_id: str | None) -> dict[str, Any] | None:
@@ -362,66 +409,27 @@ def connection(
     return _connection_payload(info, mode=use_mode)
 
 
-@app.post("/api/scan")
-def api_scan(body: ScanRequest | None = None):
-    """Run a scan using Settings credentials (body fields optional overrides)."""
-    global latest_scan
-    try:
-        body = body or ScanRequest()
-        rt = connection_store.resolve_runtime()
+def _normalize_scan_result(result: dict[str, Any], mode: str) -> dict[str, Any]:
+    """Apply demo suppressions + vulnerability projection used by the UI."""
+    if mode == "simulate":
+        fixed = remediation_engine.get_simulate_fixed()
+        if fixed:
+            findings = [
+                f
+                for f in (result.get("findings") or [])
+                if not remediation_engine.finding_is_fixed(f, fixed)
+            ]
+            result["findings"] = findings
+            result["total_findings"] = len(findings)
+            summary = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
+            for f in findings:
+                sev = f.get("severity")
+                if sev in summary:
+                    summary[sev] += 1
+            result["summary"] = summary
+            from scanner_engine import compute_score
 
-        mode = body.mode or rt["auth_mode"]
-        role_arn = body.role_arn or rt.get("role_arn")
-        external_id = (
-            body.external_id
-            if body.external_id is not None
-            else (rt.get("external_id") or None)
-        )
-        region = body.region or rt.get("region") or "us-east-1"
-
-        result = run_scan(
-            mode=mode,
-            role_arn=role_arn,
-            external_id=external_id,
-            region=region,
-        )
-        # Demo only: hide findings applied in simulate until Make as before.
-        # Real AWS re-scan always reflects the live account (no fake suppress).
-        if mode == "simulate":
-            fixed = remediation_engine.get_simulate_fixed()
-            if fixed:
-                findings = [
-                    f
-                    for f in (result.get("findings") or [])
-                    if not remediation_engine.finding_is_fixed(f, fixed)
-                ]
-                result["findings"] = findings
-                result["total_findings"] = len(findings)
-                summary = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
-                for f in findings:
-                    sev = f.get("severity")
-                    if sev in summary:
-                        summary[sev] += 1
-                result["summary"] = summary
-                from scanner_engine import compute_score
-
-                result["score"] = compute_score(findings)
-                result["vulnerabilities"] = [
-                    {
-                        "id": f.get("id") or f.get("resource"),
-                        "service": f.get("service"),
-                        "severity": f.get("severity"),
-                        "description": f.get("description"),
-                        "title": f.get("title"),
-                        "remediation": f.get("remediation"),
-                        "compliance": f.get("compliance"),
-                        "rule_id": f.get("rule_id"),
-                        "region": f.get("region"),
-                    }
-                    for f in findings
-                ]
-        else:
-            # Normalize vulnerability ids for Fix matching
+            result["score"] = compute_score(findings)
             result["vulnerabilities"] = [
                 {
                     "id": f.get("id") or f.get("resource"),
@@ -434,8 +442,79 @@ def api_scan(body: ScanRequest | None = None):
                     "rule_id": f.get("rule_id"),
                     "region": f.get("region"),
                 }
-                for f in (result.get("findings") or [])
+                for f in findings
             ]
+            return result
+
+    result["vulnerabilities"] = [
+        {
+            "id": f.get("id") or f.get("resource"),
+            "service": f.get("service"),
+            "severity": f.get("severity"),
+            "description": f.get("description"),
+            "title": f.get("title"),
+            "remediation": f.get("remediation"),
+            "compliance": f.get("compliance"),
+            "rule_id": f.get("rule_id"),
+            "region": f.get("region"),
+        }
+        for f in (result.get("findings") or [])
+    ]
+    return result
+
+
+def _persist_scan(result: dict[str, Any]) -> dict[str, Any]:
+    global latest_scan
+    latest_scan = result
+    scan_history.insert(0, result)
+    if len(scan_history) > 50:
+        del scan_history[50:]
+    scan_persistence.save_scan(result, scan_history)
+    return result
+
+
+def _execute_scan(
+    *,
+    mode: str | None = None,
+    role_arn: str | None = None,
+    external_id: str | None = None,
+    region: str | None = None,
+) -> dict[str, Any]:
+    """Core scan used by API and the background scheduler."""
+    rt = connection_store.resolve_runtime()
+    use_mode = mode or rt["auth_mode"]
+    use_role = role_arn or rt.get("role_arn")
+    use_external = (
+        external_id if external_id is not None else (rt.get("external_id") or None)
+    )
+    use_region = region or rt.get("region") or "us-east-1"
+
+    result = run_scan(
+        mode=use_mode,
+        role_arn=use_role,
+        external_id=use_external,
+        region=use_region,
+    )
+    result = _normalize_scan_result(result, use_mode)
+    return _persist_scan(result)
+
+
+def _execute_scan_for_scheduler() -> dict[str, Any]:
+    """Scheduler entrypoint — uses saved Settings only."""
+    return _execute_scan()
+
+
+@app.post("/api/scan")
+def api_scan(body: ScanRequest | None = None):
+    """Run a scan using Settings credentials (body fields optional overrides)."""
+    try:
+        body = body or ScanRequest()
+        return _execute_scan(
+            mode=body.mode,
+            role_arn=body.role_arn,
+            external_id=body.external_id,
+            region=body.region,
+        )
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
@@ -450,14 +529,60 @@ def api_scan(body: ScanRequest | None = None):
             },
         ) from exc
 
-    latest_scan = result
-    scan_history.insert(0, result)
-    if len(scan_history) > 50:
-        del scan_history[50:]
-    # Persist so reopen + PDF work without a new scan
-    scan_persistence.save_scan(result, scan_history)
 
+# ── Scheduled scans + Gmail alerts ─────────────────────────────────────────
+
+
+@app.get("/api/settings/schedule")
+def get_schedule_settings():
+    return schedule_store.public_view()
+
+
+@app.put("/api/settings/schedule")
+def put_schedule_settings(body: ScheduleSettingsUpdate):
+    profile = schedule_store.update(body.model_dump(exclude_unset=True))
+    return {
+        "ok": True,
+        "message": "Schedule & alert settings saved.",
+        "settings": schedule_store.public_view(profile),
+    }
+
+
+@app.post("/api/settings/schedule/run-now")
+def run_schedule_now():
+    """Trigger one scheduled scan immediately (also used by external cron)."""
+    try:
+        result = scan_scheduler.run_scheduled_scan(reason="manual")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if not result.get("ok"):
+        raise HTTPException(status_code=502, detail=result.get("message") or "Scan failed")
     return result
+
+
+@app.post("/api/settings/schedule/test-email")
+def test_schedule_email():
+    profile = schedule_store.load()
+    try:
+        note = email_alerts.send_test_email(profile)
+        schedule_store.record_email(status="ok", message=note)
+        return {
+            "ok": True,
+            "message": note,
+            "settings": schedule_store.public_view(),
+        }
+    except Exception as exc:  # noqa: BLE001
+        schedule_store.record_email(status="failed", message=str(exc))
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "error": str(exc),
+                "hint": (
+                    "Use a Gmail App Password (not your normal password). "
+                    "Enable 2-Step Verification → App passwords in Google Account."
+                ),
+            },
+        ) from exc
 
 
 @app.get("/api/scans")

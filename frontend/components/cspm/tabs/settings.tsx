@@ -16,6 +16,9 @@ import {
   PlugZap,
   BookOpen,
   Lock,
+  Clock,
+  Mail,
+  Play,
 } from "lucide-react";
 import {
   getConnectionSettings,
@@ -24,12 +27,50 @@ import {
   clearConnectionCredentials,
   rememberAwsCreds,
   clearAwsCreds,
+  getScheduleSettings,
+  saveScheduleSettings,
+  runScheduleNow,
+  testScheduleEmail,
   type ConnectionSettings,
   type CloudProvider,
   type ScanMode,
+  type ScheduleSettings,
+  type AlertWhen,
 } from "@/lib/api";
 import { useScanStore } from "@/lib/scan-store";
 import { cn } from "@/lib/utils";
+
+const INTERVAL_OPTIONS: { minutes: number; label: string }[] = [
+  { minutes: 15, label: "Every 15 minutes" },
+  { minutes: 30, label: "Every 30 minutes" },
+  { minutes: 60, label: "Every hour" },
+  { minutes: 360, label: "Every 6 hours" },
+  { minutes: 720, label: "Every 12 hours" },
+  { minutes: 1440, label: "Every day" },
+];
+
+const ALERT_WHEN_OPTIONS: { id: AlertWhen; label: string; hint: string }[] = [
+  {
+    id: "always",
+    label: "After every scan",
+    hint: "Email even when the cloud looks clean.",
+  },
+  {
+    id: "any_findings",
+    label: "Any findings",
+    hint: "Email only if the scan found at least one issue.",
+  },
+  {
+    id: "high_or_critical",
+    label: "High or critical",
+    hint: "Email only for serious risk (recommended).",
+  },
+  {
+    id: "critical_only",
+    label: "Critical only",
+    hint: "Email only when critical issues appear.",
+  },
+];
 
 const REGIONS = [
   "us-east-1",
@@ -209,6 +250,33 @@ export function SettingsTab() {
   const [gcpProjectId, setGcpProjectId] = useState("");
   const [gcpSaJson, setGcpSaJson] = useState("");
 
+  // Schedule + Gmail alerts
+  const [schedule, setSchedule] = useState<ScheduleSettings | null>(null);
+  const [schedEnabled, setSchedEnabled] = useState(false);
+  const [intervalMinutes, setIntervalMinutes] = useState(60);
+  const [emailEnabled, setEmailEnabled] = useState(false);
+  const [recipients, setRecipients] = useState("");
+  const [gmailAddress, setGmailAddress] = useState("");
+  const [gmailAppPassword, setGmailAppPassword] = useState("");
+  const [showAppPassword, setShowAppPassword] = useState(false);
+  const [alertWhen, setAlertWhen] = useState<AlertWhen>("high_or_critical");
+  const [includeDetails, setIncludeDetails] = useState(true);
+  const [savingSchedule, setSavingSchedule] = useState(false);
+  const [runningSchedule, setRunningSchedule] = useState(false);
+  const [testingEmail, setTestingEmail] = useState(false);
+
+  const applySchedule = (s: ScheduleSettings) => {
+    setSchedule(s);
+    setSchedEnabled(s.enabled);
+    setIntervalMinutes(s.interval_minutes || 60);
+    setEmailEnabled(s.email_enabled);
+    setRecipients(s.recipients || "");
+    setGmailAddress(s.gmail_address || "");
+    setGmailAppPassword("");
+    setAlertWhen((s.alert_when as AlertWhen) || "high_or_critical");
+    setIncludeDetails(s.include_finding_details !== false);
+  };
+
   const load = async () => {
     setLoading(true);
     try {
@@ -225,6 +293,12 @@ export function SettingsTab() {
       setSecretKey("");
       setSessionToken("");
       setGcpSaJson("");
+      try {
+        const sch = await getScheduleSettings();
+        applySchedule(sch);
+      } catch {
+        /* schedule API optional if older backend */
+      }
     } catch (e) {
       setBanner({
         type: "error",
@@ -354,6 +428,83 @@ export function SettingsTab() {
       });
     } finally {
       setClearing(false);
+    }
+  };
+
+  const onSaveSchedule = async () => {
+    setSavingSchedule(true);
+    setBanner(null);
+    try {
+      const res = await saveScheduleSettings({
+        enabled: schedEnabled,
+        interval_minutes: intervalMinutes,
+        email_enabled: emailEnabled,
+        recipients,
+        gmail_address: gmailAddress,
+        gmail_app_password: gmailAppPassword || undefined,
+        alert_when: alertWhen,
+        include_finding_details: includeDetails,
+      });
+      applySchedule(res.settings);
+      setBanner({ type: "ok", text: res.message });
+    } catch (e) {
+      setBanner({
+        type: "error",
+        text: e instanceof Error ? e.message : "Could not save schedule",
+      });
+    } finally {
+      setSavingSchedule(false);
+    }
+  };
+
+  const onRunScheduleNow = async () => {
+    setRunningSchedule(true);
+    setBanner(null);
+    try {
+      const res = await runScheduleNow();
+      if (res.settings) applySchedule(res.settings);
+      const emailNote = res.email?.message ? ` · ${res.email.message}` : "";
+      setBanner({
+        type: "ok",
+        text: `${res.message}${emailNote}`,
+      });
+      await bootstrap();
+    } catch (e) {
+      setBanner({
+        type: "error",
+        text: e instanceof Error ? e.message : "Scheduled scan failed",
+      });
+    } finally {
+      setRunningSchedule(false);
+    }
+  };
+
+  const onTestEmail = async () => {
+    setTestingEmail(true);
+    setBanner(null);
+    try {
+      // Save first so SMTP credentials are on the server
+      const saved = await saveScheduleSettings({
+        enabled: schedEnabled,
+        interval_minutes: intervalMinutes,
+        email_enabled: emailEnabled,
+        recipients,
+        gmail_address: gmailAddress,
+        gmail_app_password: gmailAppPassword || undefined,
+        alert_when: alertWhen,
+        include_finding_details: includeDetails,
+      });
+      applySchedule(saved.settings);
+      const res = await testScheduleEmail();
+      applySchedule(res.settings);
+      setBanner({ type: "ok", text: res.message });
+    } catch (e) {
+      setBanner({
+        type: "error",
+        text: e instanceof Error ? e.message : "Test email failed",
+      });
+    } finally {
+      setTestingEmail(false);
     }
   };
 
@@ -852,6 +1003,280 @@ export function SettingsTab() {
           </span>
         )}
       </div>
+
+      {/* Schedule + Gmail alerts */}
+      <section className="rounded-lg border border-border bg-panel p-5">
+        <div className="mb-1 flex items-center gap-2">
+          <Clock className="size-4 text-accent-blue" />
+          <h4 className="font-mono text-xs font-bold tracking-[0.14em] text-foreground">
+            SCHEDULED CHECKS &amp; GMAIL ALERTS
+          </h4>
+        </div>
+        <p className="mb-4 max-w-2xl text-[11px] leading-relaxed text-muted-foreground">
+          Automatically re-check the cloud on a timer (for example every hour).
+          When risk is found, VaultScan can email a short report to the people
+          you assign — like a security alert, without waiting for someone to open
+          the dashboard.
+        </p>
+
+        <div className="mb-4 grid gap-3 sm:grid-cols-2">
+          <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border bg-panel-alt p-3">
+            <input
+              type="checkbox"
+              checked={schedEnabled}
+              onChange={(e) => setSchedEnabled(e.target.checked)}
+              className="mt-0.5 size-4 accent-[var(--accent-blue)]"
+            />
+            <span>
+              <span className="block text-xs font-semibold text-foreground">
+                Enable automatic scans
+              </span>
+              <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                Uses your saved Cloud Connection (real AWS or Demo).
+              </span>
+            </span>
+          </label>
+          <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border bg-panel-alt p-3">
+            <input
+              type="checkbox"
+              checked={emailEnabled}
+              onChange={(e) => setEmailEnabled(e.target.checked)}
+              className="mt-0.5 size-4 accent-[var(--accent-blue)]"
+            />
+            <span>
+              <span className="block text-xs font-semibold text-foreground">
+                Enable Gmail alerts
+              </span>
+              <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                Send a summary email after scheduled scans.
+              </span>
+            </span>
+          </label>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-2">
+          <div>
+            <FieldLabel
+              label="CHECK EVERY"
+              hint="How often VaultScan re-scans while the API is running."
+            />
+            <select
+              value={intervalMinutes}
+              onChange={(e) => setIntervalMinutes(Number(e.target.value))}
+              className="w-full rounded-md border border-border bg-background px-3 py-2.5 font-mono text-xs text-foreground outline-none focus:border-accent-blue/50"
+            >
+              {INTERVAL_OPTIONS.map((o) => (
+                <option key={o.minutes} value={o.minutes}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <FieldLabel
+              label="SEND ALERT WHEN"
+              hint="Avoid inbox noise — only email when risk matches this rule."
+            />
+            <select
+              value={alertWhen}
+              onChange={(e) => setAlertWhen(e.target.value as AlertWhen)}
+              className="w-full rounded-md border border-border bg-background px-3 py-2.5 font-mono text-xs text-foreground outline-none focus:border-accent-blue/50"
+            >
+              {ALERT_WHEN_OPTIONS.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1 text-[10px] text-muted-foreground">
+              {ALERT_WHEN_OPTIONS.find((o) => o.id === alertWhen)?.hint}
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-4 grid gap-4 md:grid-cols-2">
+          <div>
+            <FieldLabel
+              label="YOUR GMAIL (SENDER)"
+              hint="The Gmail account that sends the alert (needs an App Password)."
+            />
+            <TextInput
+              value={gmailAddress}
+              onChange={setGmailAddress}
+              placeholder="you@gmail.com"
+              mono={false}
+              autoComplete="username"
+            />
+          </div>
+          <div>
+            <FieldLabel
+              label="GMAIL APP PASSWORD"
+              hint={
+                schedule?.has_gmail_app_password
+                  ? "Already saved — leave blank to keep it."
+                  : "Google Account → Security → 2-Step → App passwords."
+              }
+            />
+            <div className="relative">
+              <TextInput
+                value={gmailAppPassword}
+                onChange={setGmailAppPassword}
+                type={showAppPassword ? "text" : "password"}
+                placeholder={
+                  schedule?.has_gmail_app_password
+                    ? "••••••••  (leave blank to keep)"
+                    : "16-character app password"
+                }
+                autoComplete="new-password"
+              />
+              <button
+                type="button"
+                onClick={() => setShowAppPassword((v) => !v)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                aria-label="Toggle app password visibility"
+              >
+                {showAppPassword ? (
+                  <EyeOff className="size-3.5" />
+                ) : (
+                  <Eye className="size-3.5" />
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-4">
+          <FieldLabel
+            label="ALERT RECIPIENTS"
+            hint="Who should receive the report? Comma-separated emails."
+          />
+          <TextInput
+            value={recipients}
+            onChange={setRecipients}
+            placeholder="security@company.com, you@gmail.com"
+            mono={false}
+          />
+        </div>
+
+        <label className="mt-4 flex cursor-pointer items-start gap-2">
+          <input
+            type="checkbox"
+            checked={includeDetails}
+            onChange={(e) => setIncludeDetails(e.target.checked)}
+            className="mt-0.5 size-4 accent-[var(--accent-blue)]"
+          />
+          <span className="text-[11px] text-muted-foreground">
+            Include top findings in the email (score + critical/high list).
+          </span>
+        </label>
+
+        {(schedule?.guidance?.length ?? 0) > 0 && (
+          <div className="mt-4 space-y-2">
+            {schedule!.guidance.map((g, i) => (
+              <div
+                key={i}
+                className={cn(
+                  "flex items-start gap-2 rounded-md border px-3 py-2.5 text-[11px] leading-relaxed",
+                  g.level === "warning"
+                    ? "border-warning/30 bg-warning/5 text-warning"
+                    : "border-border bg-panel-alt text-muted-foreground",
+                )}
+              >
+                {g.level === "warning" ? (
+                  <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+                ) : (
+                  <Info className="mt-0.5 size-3.5 shrink-0 text-accent-blue" />
+                )}
+                <p>{g.text}</p>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-border pt-4">
+          <button
+            type="button"
+            onClick={() => void onSaveSchedule()}
+            disabled={savingSchedule}
+            className="flex items-center gap-2 rounded-md bg-accent-blue px-4 py-2.5 font-mono text-[11px] font-bold tracking-wider text-background transition hover:bg-accent-blue/90 disabled:opacity-50"
+          >
+            {savingSchedule ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <Save className="size-3.5" />
+            )}
+            SAVE SCHEDULE
+          </button>
+          <button
+            type="button"
+            onClick={() => void onRunScheduleNow()}
+            disabled={runningSchedule}
+            className="flex items-center gap-2 rounded-md border border-accent-blue/40 bg-accent-blue/10 px-4 py-2.5 font-mono text-[11px] font-bold tracking-wider text-accent-blue transition hover:bg-accent-blue/15 disabled:opacity-50"
+          >
+            {runningSchedule ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <Play className="size-3.5" />
+            )}
+            RUN CHECK NOW
+          </button>
+          <button
+            type="button"
+            onClick={() => void onTestEmail()}
+            disabled={testingEmail}
+            className="flex items-center gap-2 rounded-md border border-border px-4 py-2.5 font-mono text-[11px] font-bold tracking-wider text-muted-foreground transition hover:border-border-strong hover:text-foreground disabled:opacity-50"
+          >
+            {testingEmail ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <Mail className="size-3.5" />
+            )}
+            SEND TEST EMAIL
+          </button>
+        </div>
+
+        <div className="mt-4 grid gap-2 rounded-md border border-border bg-panel-alt p-3 font-mono text-[10px] text-muted-foreground sm:grid-cols-2">
+          <p>
+            Last auto-scan:{" "}
+            <span className="text-foreground">
+              {schedule?.last_run_at || "never"}
+            </span>
+            {schedule?.last_run_status && schedule.last_run_status !== "never"
+              ? ` (${schedule.last_run_status})`
+              : ""}
+          </p>
+          <p>
+            Next run:{" "}
+            <span className="text-foreground">
+              {schedule?.next_run_at || "—"}
+            </span>
+          </p>
+          <p>
+            Last email:{" "}
+            <span className="text-foreground">
+              {schedule?.last_email_at || "never"}
+            </span>
+            {schedule?.last_email_status &&
+            schedule.last_email_status !== "never"
+              ? ` (${schedule.last_email_status})`
+              : ""}
+          </p>
+          <p>
+            Completed runs:{" "}
+            <span className="text-foreground">{schedule?.run_count ?? 0}</span>
+          </p>
+          {schedule?.last_run_message && (
+            <p className="sm:col-span-2 text-[10px] leading-relaxed">
+              {schedule.last_run_message}
+            </p>
+          )}
+          {schedule?.last_email_message && (
+            <p className="sm:col-span-2 text-[10px] leading-relaxed">
+              Email: {schedule.last_email_message}
+            </p>
+          )}
+        </div>
+      </section>
     </div>
   );
 }

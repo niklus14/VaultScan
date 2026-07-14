@@ -504,6 +504,92 @@ export function clearConnectionCredentials() {
   });
 }
 
+/* ─── Schedule + Gmail alerts ───────────────────────────────────────────── */
+
+export type AlertWhen =
+  | "always"
+  | "any_findings"
+  | "high_or_critical"
+  | "critical_only";
+
+export interface ScheduleSettings {
+  enabled: boolean;
+  interval_minutes: number;
+  email_enabled: boolean;
+  recipients: string;
+  gmail_address: string;
+  has_gmail_app_password: boolean;
+  smtp_host: string;
+  smtp_port: number;
+  alert_when: AlertWhen | string;
+  include_finding_details: boolean;
+  last_run_at: string | null;
+  next_run_at: string | null;
+  last_run_status: string;
+  last_run_message: string | null;
+  last_email_status: string;
+  last_email_message: string | null;
+  last_email_at: string | null;
+  run_count: number;
+  updated_at: string | null;
+  scheduler_supported: boolean;
+  guidance: Array<{ level: string; text: string }>;
+}
+
+export interface ScheduleSettingsUpdate {
+  enabled?: boolean;
+  interval_minutes?: number;
+  email_enabled?: boolean;
+  recipients?: string;
+  gmail_address?: string;
+  gmail_app_password?: string;
+  smtp_host?: string;
+  smtp_port?: number;
+  alert_when?: AlertWhen;
+  include_finding_details?: boolean;
+}
+
+export function getScheduleSettings() {
+  return request<ScheduleSettings>("/api/settings/schedule");
+}
+
+export function saveScheduleSettings(body: ScheduleSettingsUpdate) {
+  return request<{
+    ok: boolean;
+    message: string;
+    settings: ScheduleSettings;
+  }>("/api/settings/schedule", {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+}
+
+export function runScheduleNow() {
+  return request<{
+    ok: boolean;
+    message: string;
+    scan_id?: string;
+    score?: number;
+    total_findings?: number;
+    email?: { ok?: boolean; message?: string; skipped?: boolean } | null;
+    settings?: ScheduleSettings;
+  }>("/api/settings/schedule/run-now", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export function testScheduleEmail() {
+  return request<{
+    ok: boolean;
+    message: string;
+    settings: ScheduleSettings;
+  }>("/api/settings/schedule/test-email", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
 /* ─── AI remediation ─────────────────────────────────────────────────────── */
 
 export type FixRisk = "safe" | "elevated" | "dangerous";
