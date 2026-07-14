@@ -25,7 +25,9 @@ _STORE_PATH = _DATA_DIR / "schedule.json"
 _LOCK = threading.Lock()
 _SECRET_PLACEHOLDERS = {"", "••••••••", "********", "unchanged", "__UNCHANGED__"}
 
-INTERVAL_CHOICES = (15, 30, 60, 360, 720, 1440)  # minutes
+# Any positive interval is allowed (UI free-entry). Soft bounds for safety.
+MIN_INTERVAL_MINUTES = 1
+MAX_INTERVAL_MINUTES = 10080  # 7 days
 
 
 def _utcnow() -> str:
@@ -49,6 +51,8 @@ def _default() -> dict[str, Any]:
         "recipients": "",
         "gmail_address": "",
         "gmail_app_password": "",
+        # Shown in Gmail inbox as the sender name (From: Name <email>)
+        "from_name": "VaultScan Company",
         "smtp_host": "smtp.gmail.com",
         "smtp_port": 587,
         # always | any_findings | high_or_critical | critical_only
@@ -119,10 +123,10 @@ def public_view(profile: dict[str, Any] | None = None) -> dict[str, Any]:
         "interval_minutes": int(p.get("interval_minutes") or 60),
         "email_enabled": bool(p.get("email_enabled")),
         "recipients": recipients,
-        "gmail_address": p.get("gmail_address") or "",
-        "has_gmail_app_password": bool(p.get("gmail_app_password")),
-        "smtp_host": p.get("smtp_host") or "smtp.gmail.com",
-        "smtp_port": int(p.get("smtp_port") or 587),
+        # Company sender is fixed in server config — never expose password to UI
+        "sender_display": "VaultScan Company",
+        "system_sender_ready": True,
+        "from_name": "VaultScan Company",
         "alert_when": p.get("alert_when") or "high_or_critical",
         "include_finding_details": bool(p.get("include_finding_details", True)),
         "last_run_at": p.get("last_run_at"),
@@ -162,21 +166,21 @@ def _guidance(p: dict[str, Any], *, serverless: bool) -> list[dict[str, str]]:
             }
         )
     if p.get("email_enabled"):
-        if not (p.get("gmail_address") and p.get("gmail_app_password")):
-            tips.append(
-                {
-                    "level": "warning",
-                    "text": (
-                        "Email alerts are enabled but Gmail address or App Password is missing. "
-                        "Create a Google App Password (Google Account → Security → 2-Step → App passwords)."
-                    ),
-                }
-            )
         if not (p.get("recipients") or "").strip():
             tips.append(
                 {
                     "level": "warning",
-                    "text": "Add at least one recipient email for alerts.",
+                    "text": "Enter your Gmail so VaultScan can send alerts to you.",
+                }
+            )
+        else:
+            tips.append(
+                {
+                    "level": "info",
+                    "text": (
+                        "Alerts are sent as VaultScan Company. "
+                        "You only need your own Gmail as the recipient."
+                    ),
                 }
             )
     return tips
@@ -191,9 +195,7 @@ def update(payload: dict[str, Any]) -> dict[str, Any]:
 
         if "interval_minutes" in payload and payload["interval_minutes"] is not None:
             mins = int(payload["interval_minutes"])
-            if mins not in INTERVAL_CHOICES:
-                # allow custom but clamp to sane range
-                mins = max(5, min(mins, 10080))
+            mins = max(MIN_INTERVAL_MINUTES, min(mins, MAX_INTERVAL_MINUTES))
             current["interval_minutes"] = mins
 
         if "email_enabled" in payload and payload["email_enabled"] is not None:
@@ -207,6 +209,10 @@ def update(payload: dict[str, Any]) -> dict[str, Any]:
 
         if "gmail_address" in payload and payload["gmail_address"] is not None:
             current["gmail_address"] = str(payload["gmail_address"]).strip()
+
+        if "from_name" in payload and payload["from_name"] is not None:
+            name = str(payload["from_name"]).strip()
+            current["from_name"] = name or "VaultScan Company"
 
         if "gmail_app_password" in payload:
             val = (payload.get("gmail_app_password") or "").strip()

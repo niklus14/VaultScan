@@ -38,5 +38,24 @@ class Settings:
         if o.strip()
     ]
 
+    # Built-in alert sender (hidden from UI — users only enter their own Gmail as recipient)
+    # Override with env in production if needed.
+    vaultscan_gmail_address: str = os.getenv(
+        "VAULTSCAN_GMAIL_ADDRESS",
+        "Vaultscan.company@gmail.com",
+    ).strip()
+    vaultscan_gmail_app_password: str = "".join(
+        os.getenv(
+            "VAULTSCAN_GMAIL_APP_PASSWORD",
+            "kkdx mjbf hizp rsgm",
+        ).split()
+    )
+    vaultscan_from_name: str = os.getenv(
+        "VAULTSCAN_FROM_NAME",
+        "VaultScan Company",
+    ).strip() or "VaultScan Company"
+    vaultscan_smtp_host: str = os.getenv("VAULTSCAN_SMTP_HOST", "smtp.gmail.com").strip()
+    vaultscan_smtp_port: int = int(os.getenv("VAULTSCAN_SMTP_PORT", "587"))
+
 
 settings = Settings()

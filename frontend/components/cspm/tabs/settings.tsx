@@ -40,14 +40,8 @@ import {
 import { useScanStore } from "@/lib/scan-store";
 import { cn } from "@/lib/utils";
 
-const INTERVAL_OPTIONS: { minutes: number; label: string }[] = [
-  { minutes: 15, label: "Every 15 minutes" },
-  { minutes: 30, label: "Every 30 minutes" },
-  { minutes: 60, label: "Every hour" },
-  { minutes: 360, label: "Every 6 hours" },
-  { minutes: 720, label: "Every 12 hours" },
-  { minutes: 1440, label: "Every day" },
-];
+/** Optional quick picks — user can still type any minute value. */
+const INTERVAL_PRESETS = [5, 15, 30, 60, 120, 360, 1440] as const;
 
 const ALERT_WHEN_OPTIONS: { id: AlertWhen; label: string; hint: string }[] = [
   {
@@ -256,9 +250,6 @@ export function SettingsTab() {
   const [intervalMinutes, setIntervalMinutes] = useState(60);
   const [emailEnabled, setEmailEnabled] = useState(false);
   const [recipients, setRecipients] = useState("");
-  const [gmailAddress, setGmailAddress] = useState("");
-  const [gmailAppPassword, setGmailAppPassword] = useState("");
-  const [showAppPassword, setShowAppPassword] = useState(false);
   const [alertWhen, setAlertWhen] = useState<AlertWhen>("high_or_critical");
   const [includeDetails, setIncludeDetails] = useState(true);
   const [savingSchedule, setSavingSchedule] = useState(false);
@@ -271,8 +262,6 @@ export function SettingsTab() {
     setIntervalMinutes(s.interval_minutes || 60);
     setEmailEnabled(s.email_enabled);
     setRecipients(s.recipients || "");
-    setGmailAddress(s.gmail_address || "");
-    setGmailAppPassword("");
     setAlertWhen((s.alert_when as AlertWhen) || "high_or_critical");
     setIncludeDetails(s.include_finding_details !== false);
   };
@@ -440,8 +429,6 @@ export function SettingsTab() {
         interval_minutes: intervalMinutes,
         email_enabled: emailEnabled,
         recipients,
-        gmail_address: gmailAddress,
-        gmail_app_password: gmailAppPassword || undefined,
         alert_when: alertWhen,
         include_finding_details: includeDetails,
       });
@@ -489,8 +476,6 @@ export function SettingsTab() {
         interval_minutes: intervalMinutes,
         email_enabled: emailEnabled,
         recipients,
-        gmail_address: gmailAddress,
-        gmail_app_password: gmailAppPassword || undefined,
         alert_when: alertWhen,
         include_finding_details: includeDetails,
       });
@@ -1014,9 +999,8 @@ export function SettingsTab() {
         </div>
         <p className="mb-4 max-w-2xl text-[11px] leading-relaxed text-muted-foreground">
           Automatically re-check the cloud on a timer (for example every hour).
-          When risk is found, VaultScan can email a short report to the people
-          you assign — like a security alert, without waiting for someone to open
-          the dashboard.
+          Alerts are sent from <span className="text-foreground">VaultScan Company</span> —
+          you only enter <span className="text-foreground">your own Gmail</span> to receive them.
         </p>
 
         <div className="mb-4 grid gap-3 sm:grid-cols-2">
@@ -1057,20 +1041,57 @@ export function SettingsTab() {
         <div className="grid gap-4 md:grid-cols-2">
           <div>
             <FieldLabel
-              label="CHECK EVERY"
-              hint="How often VaultScan re-scans while the API is running."
+              label="CHECK EVERY (MINUTES)"
+              hint="Any number of minutes you want — e.g. 7, 45, 90. Not limited to presets."
             />
-            <select
-              value={intervalMinutes}
-              onChange={(e) => setIntervalMinutes(Number(e.target.value))}
-              className="w-full rounded-md border border-border bg-background px-3 py-2.5 font-mono text-xs text-foreground outline-none focus:border-accent-blue/50"
-            >
-              {INTERVAL_OPTIONS.map((o) => (
-                <option key={o.minutes} value={o.minutes}>
-                  {o.label}
-                </option>
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                min={1}
+                max={10080}
+                step={1}
+                value={intervalMinutes}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  if (Number.isFinite(n)) {
+                    setIntervalMinutes(Math.max(1, Math.min(10080, Math.floor(n))));
+                  } else if (e.target.value === "") {
+                    setIntervalMinutes(1);
+                  }
+                }}
+                className="w-full rounded-md border border-border bg-background px-3 py-2.5 font-mono text-xs text-foreground outline-none focus:border-accent-blue/50"
+              />
+              <span className="shrink-0 font-mono text-[10px] tracking-wider text-muted-foreground">
+                MIN
+              </span>
+            </div>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {INTERVAL_PRESETS.map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setIntervalMinutes(m)}
+                  className={cn(
+                    "rounded-sm border px-2 py-1 font-mono text-[10px] tracking-wider transition",
+                    intervalMinutes === m
+                      ? "border-accent-blue/50 bg-accent-blue/15 text-accent-blue"
+                      : "border-border text-muted-foreground hover:border-border-strong hover:text-foreground",
+                  )}
+                >
+                  {m}m
+                </button>
               ))}
-            </select>
+            </div>
+            <p className="mt-1.5 text-[10px] text-muted-foreground">
+              {intervalMinutes === 1
+                ? "Every 1 minute"
+                : intervalMinutes < 60
+                  ? `Every ${intervalMinutes} minutes`
+                  : intervalMinutes % 60 === 0
+                    ? `Every ${intervalMinutes / 60} hour${intervalMinutes / 60 === 1 ? "" : "s"}`
+                    : `Every ${intervalMinutes} minutes (~${(intervalMinutes / 60).toFixed(1)} h)`}
+              {" · "}allowed 1–10080 (7 days)
+            </p>
           </div>
           <div>
             <FieldLabel
@@ -1094,67 +1115,17 @@ export function SettingsTab() {
           </div>
         </div>
 
-        <div className="mt-4 grid gap-4 md:grid-cols-2">
-          <div>
-            <FieldLabel
-              label="YOUR GMAIL (SENDER)"
-              hint="The Gmail account that sends the alert (needs an App Password)."
-            />
-            <TextInput
-              value={gmailAddress}
-              onChange={setGmailAddress}
-              placeholder="you@gmail.com"
-              mono={false}
-              autoComplete="username"
-            />
-          </div>
-          <div>
-            <FieldLabel
-              label="GMAIL APP PASSWORD"
-              hint={
-                schedule?.has_gmail_app_password
-                  ? "Already saved — leave blank to keep it."
-                  : "Google Account → Security → 2-Step → App passwords."
-              }
-            />
-            <div className="relative">
-              <TextInput
-                value={gmailAppPassword}
-                onChange={setGmailAppPassword}
-                type={showAppPassword ? "text" : "password"}
-                placeholder={
-                  schedule?.has_gmail_app_password
-                    ? "••••••••  (leave blank to keep)"
-                    : "16-character app password"
-                }
-                autoComplete="new-password"
-              />
-              <button
-                type="button"
-                onClick={() => setShowAppPassword((v) => !v)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                aria-label="Toggle app password visibility"
-              >
-                {showAppPassword ? (
-                  <EyeOff className="size-3.5" />
-                ) : (
-                  <Eye className="size-3.5" />
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-
         <div className="mt-4">
           <FieldLabel
-            label="ALERT RECIPIENTS"
-            hint="Who should receive the report? Comma-separated emails."
+            label="YOUR GMAIL"
+            hint="Where VaultScan should send alerts. Sender is always VaultScan Company (no password needed from you)."
           />
           <TextInput
             value={recipients}
             onChange={setRecipients}
-            placeholder="security@company.com, you@gmail.com"
+            placeholder="you@gmail.com"
             mono={false}
+            autoComplete="email"
           />
         </div>
 

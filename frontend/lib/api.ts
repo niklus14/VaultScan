@@ -516,11 +516,11 @@ export interface ScheduleSettings {
   enabled: boolean;
   interval_minutes: number;
   email_enabled: boolean;
+  /** User's Gmail — only field they configure for delivery */
   recipients: string;
-  gmail_address: string;
-  has_gmail_app_password: boolean;
-  smtp_host: string;
-  smtp_port: number;
+  sender_display?: string;
+  system_sender_ready?: boolean;
+  from_name?: string;
   alert_when: AlertWhen | string;
   include_finding_details: boolean;
   last_run_at: string | null;
@@ -541,10 +541,6 @@ export interface ScheduleSettingsUpdate {
   interval_minutes?: number;
   email_enabled?: boolean;
   recipients?: string;
-  gmail_address?: string;
-  gmail_app_password?: string;
-  smtp_host?: string;
-  smtp_port?: number;
   alert_when?: AlertWhen;
   include_finding_details?: boolean;
 }

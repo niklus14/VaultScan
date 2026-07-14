@@ -8,6 +8,7 @@ import html
 import smtplib
 import ssl
 from email.message import EmailMessage
+from email.utils import formataddr
 from typing import Any
 
 
@@ -167,27 +168,63 @@ def send_email(
     subject: str,
     text_body: str,
     html_body: str | None = None,
+    from_name: str | None = None,
 ) -> None:
     if not gmail_address or not gmail_app_password:
         raise ValueError("Gmail address and App Password are required.")
     if not recipients:
         raise ValueError("At least one recipient is required.")
 
+    user = (gmail_address or "").strip()
+    # Inbox shows this name (e.g. "VaultScan Company") instead of only the raw address
+    display = (from_name or "VaultScan Company").strip() or "VaultScan Company"
+
     msg = EmailMessage()
     msg["Subject"] = subject
-    msg["From"] = gmail_address
+    msg["From"] = formataddr((display, user))
     msg["To"] = ", ".join(recipients)
     msg.set_content(text_body)
     if html_body:
         msg.add_alternative(html_body, subtype="html")
 
+    # Normalize App Password: Google shows "xxxx xxxx xxxx xxxx" — SMTP wants 16 chars, no spaces
+    password = "".join(str(gmail_app_password).split())
+
     context = ssl.create_default_context()
-    with smtplib.SMTP(smtp_host, int(smtp_port), timeout=45) as server:
-        server.ehlo()
-        server.starttls(context=context)
-        server.ehlo()
-        server.login(gmail_address, gmail_app_password)
-        server.send_message(msg)
+    try:
+        with smtplib.SMTP(smtp_host, int(smtp_port), timeout=45) as server:
+            server.ehlo()
+            server.starttls(context=context)
+            server.ehlo()
+            server.login(user, password)
+            server.send_message(msg)
+    except smtplib.SMTPAuthenticationError as exc:
+        raise RuntimeError(
+            "Gmail rejected the username/password (SMTP 535). "
+            "Use a Google App Password — not your normal Gmail password. "
+            "Steps: (1) Enable 2-Step Verification on the SENDER Google account "
+            f"({user}). (2) Open https://myaccount.google.com/apppasswords "
+            "→ create password for Mail / VaultScan. (3) Paste the 16-character "
+            "code into VaultScan → Save schedule → Send test email. "
+            "If it still fails: revoke the old App Password, create a new one, "
+            "and paste it again (do not leave the field blank). "
+            f"Google detail: {exc}"
+        ) from exc
+    except smtplib.SMTPException as exc:
+        raise RuntimeError(f"Gmail SMTP error: {exc}") from exc
+
+
+def _system_sender() -> dict[str, Any]:
+    """Company Gmail used to send alerts — not shown in the product UI."""
+    from config import settings
+
+    return {
+        "gmail_address": settings.vaultscan_gmail_address,
+        "gmail_app_password": settings.vaultscan_gmail_app_password,
+        "from_name": settings.vaultscan_from_name,
+        "smtp_host": settings.vaultscan_smtp_host,
+        "smtp_port": settings.vaultscan_smtp_port,
+    }
 
 
 def send_scan_alert(scan: dict[str, Any], profile: dict[str, Any]) -> str:
@@ -198,15 +235,17 @@ def send_scan_alert(scan: dict[str, Any], profile: dict[str, Any]) -> str:
         scan,
         include_finding_details=bool(profile.get("include_finding_details", True)),
     )
+    sender = _system_sender()
     send_email(
-        smtp_host=profile.get("smtp_host") or "smtp.gmail.com",
-        smtp_port=int(profile.get("smtp_port") or 587),
-        gmail_address=(profile.get("gmail_address") or "").strip(),
-        gmail_app_password=(profile.get("gmail_app_password") or "").strip(),
+        smtp_host=sender["smtp_host"],
+        smtp_port=int(sender["smtp_port"]),
+        gmail_address=sender["gmail_address"],
+        gmail_app_password=sender["gmail_app_password"],
         recipients=recipients,
         subject=subject,
         text_body=text_body,
         html_body=html_body,
+        from_name=sender["from_name"],
     )
     return f"Alert sent to {', '.join(recipients)}"
 
@@ -215,34 +254,38 @@ def send_test_email(profile: dict[str, Any]) -> str:
     from schedule_store import parse_recipients
 
     recipients = parse_recipients(profile.get("recipients"))
-    if not recipients and profile.get("gmail_address"):
-        recipients = [str(profile["gmail_address"]).strip()]
-    subject = "[VaultScan] Test alert — email is working"
+    if not recipients:
+        raise ValueError("Enter your Gmail first, then save and send a test.")
+    sender = _system_sender()
+    from_name = sender["from_name"]
+    subject = f"[{from_name}] Test alert — email is working"
     text_body = (
-        "This is a VaultScan test message.\n\n"
-        "If you received this, Gmail SMTP settings are correct.\n"
+        f"This is a {from_name} test message.\n\n"
+        "If you received this, alerts are working.\n"
         "Scheduled scan alerts will use the same channel.\n"
     )
     html_body = f"""
     <div style="font-family:system-ui,sans-serif;padding:24px;background:#0b0c10;color:#f4f6fb">
       <div style="max-width:520px;margin:0 auto;background:#111217;border-radius:10px;
            padding:24px;border:1px solid rgba(255,255,255,0.08)">
-        <p style="color:#3874ff;font-size:11px;letter-spacing:0.14em">VAULTSCAN</p>
+        <p style="color:#3874ff;font-size:11px;letter-spacing:0.14em">{_esc(from_name.upper())}</p>
         <h2 style="margin:8px 0">Test alert OK</h2>
         <p style="color:#6b7280;font-size:14px">
-          Gmail delivery works. Scheduled scans can email reports to your assigned recipients.
+          Delivery works. In your inbox the sender should appear as
+          <strong style="color:#f4f6fb">{_esc(from_name)}</strong>.
         </p>
       </div>
     </div>
     """
     send_email(
-        smtp_host=profile.get("smtp_host") or "smtp.gmail.com",
-        smtp_port=int(profile.get("smtp_port") or 587),
-        gmail_address=(profile.get("gmail_address") or "").strip(),
-        gmail_app_password=(profile.get("gmail_app_password") or "").strip(),
+        smtp_host=sender["smtp_host"],
+        smtp_port=int(sender["smtp_port"]),
+        gmail_address=sender["gmail_address"],
+        gmail_app_password=sender["gmail_app_password"],
         recipients=recipients,
         subject=subject,
         text_body=text_body,
         html_body=html_body,
+        from_name=from_name,
     )
     return f"Test email sent to {', '.join(recipients)}"

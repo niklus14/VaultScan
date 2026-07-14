@@ -133,23 +133,15 @@ class ScheduleSettingsUpdate(BaseModel):
     enabled: bool | None = None
     interval_minutes: int | None = Field(
         default=None,
-        description="How often to auto-scan (e.g. 60 = every hour).",
+        ge=1,
+        le=10080,
+        description="Custom interval in minutes (1–10080). e.g. 7, 45, 60, 120.",
     )
     email_enabled: bool | None = None
     recipients: str | None = Field(
         default=None,
-        description="Comma-separated Gmail / email recipients for alerts.",
+        description="User Gmail that receives alerts (company sender is fixed server-side).",
     )
-    gmail_address: str | None = Field(
-        default=None,
-        description="Sender Gmail address (SMTP login).",
-    )
-    gmail_app_password: str | None = Field(
-        default=None,
-        description="Gmail App Password. Leave empty to keep existing.",
-    )
-    smtp_host: str | None = None
-    smtp_port: int | None = None
     alert_when: Literal[
         "always",
         "any_findings",
