@@ -49,10 +49,13 @@
   }
   html {
     color-scheme: dark;
+    /* Slightly larger root so rem-based UI text is easier to read */
+    font-size: 106.25%; /* 17px if browser default is 16px */
   }
   body {
     @apply bg-background text-foreground font-sans antialiased;
     -webkit-font-smoothing: antialiased;
+    line-height: 1.55;
   }
   ::-webkit-scrollbar {
     width: 6px;
