@@ -279,9 +279,14 @@ export function SettingsTab() {
       setExternalId(s.external_id || "");
       setRegionLocal(s.region || "us-east-1");
       setGcpProjectId(s.gcp_project_id || "");
-      setAccessKeyId("");
-      setSecretKey("");
-      setSessionToken("");
+      // Prefill keys from localStorage so users don't re-type every visit
+      const saved = loadAwsCreds();
+      setAccessKeyId(saved?.access_key_id || "");
+      setSecretKey(saved?.secret_access_key || "");
+      setSessionToken(saved?.session_token || "");
+      if (saved?.role_arn) setRoleArnLocal(saved.role_arn);
+      if (saved?.region) setRegionLocal(saved.region);
+      if (saved?.auth_mode) setAuthMode(saved.auth_mode);
       setGcpSaJson("");
       try {
         const sch = await getScheduleSettings();
