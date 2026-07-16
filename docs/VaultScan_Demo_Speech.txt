@@ -1,0 +1,143 @@
+VAULTSCAN — LIVE DEMO SPEECH (English)
+=====================================
+~4–6 minutes depending on demo pace
+
+
+1. OPENING
+----------
+Good morning. Today we will walk you through VaultScan — our Cloud Security
+Posture Management platform. VaultScan finds dangerous cloud misconfigurations,
+explains how attackers can chain them, helps fix them safely, and proves the
+work with reports and email alerts. We will move through the product the same
+way a real team would use it.
+
+
+2. SETTINGS — CONNECTING THE CLOUD
+----------------------------------
+First, we open the Settings section. This is where the connection begins.
+Here we enter our cloud credentials — carefully, with limited access — or we
+switch to Demo mode when we want a safe practice environment. Once the
+connection is saved, VaultScan is ready to scan without asking for keys on
+every visit.
+
+[On screen: Settings → Cloud Connection → Save → Test Connection]
+
+
+3. SCHEDULED CHECKS & GMAIL ALERTS — CONTINUOUS PROTECTION
+----------------------------------------------------------
+One of the most important strengths of VaultScan is that security does not stop
+when you leave the dashboard. In the same Settings area, you can configure a
+timer and your Gmail. With that, VaultScan can run automatic scans at any
+interval you choose — for example every hour, every 45 minutes, or every day.
+When the scan finishes, a clear alert is sent by email from VaultScan Company.
+That means you can see the result in your own inbox without signing into the
+system again.
+
+And when something serious appears, you are not left alone with a red list.
+Our integrated LLM assistant helps you understand critical and other
+misconfigurations in plain language, and guides you on how to stop the damage
+quickly.
+
+[On screen: enable schedule + Gmail alerts → enter your Gmail → Save]
+
+
+4. LAUNCH SCAN — FROM CONNECTION TO EVIDENCE
+--------------------------------------------
+Because the connection is ready, we now run a live scan and look at the
+results. Press Launch active scan. VaultScan inspects the cloud configuration,
+scores the posture, and produces findings with evidence.
+
+[On screen: Launch Active Scan]
+
+
+5. OVERVIEW — RISK AT A GLANCE
+------------------------------
+In the Overview, you immediately see how exposed the service is — from critical
+issues down to lower-severity misconfigurations. This is the command room for
+managers and engineers at the same time: one health score, severity breakdown,
+and clear status of the environment.
+
+We also show that the process is aligned with industry standards — mapping
+findings to well-known security and compliance expectations, not inventing
+random checks. On the chart, you can watch how the security level changes after
+each scan — improving when issues are fixed, or dropping when new risks appear.
+
+
+6. GENERATE REPORT & FINDINGS — PROOF YOU CAN SHARE
+---------------------------------------------------
+Once a scan is complete, every problem and its remediation path can be opened
+in detail. From Generate Report, you can create and download a professional
+package — including explanations, priorities, and practical fix guidance —
+ready for leadership or auditors.
+
+In the activity stream and history views, you can filter and review problems
+discovered over time. The same issues are fully documented in the Findings tab:
+what is wrong, why it matters, how severe it is, and how to correct it.
+
+
+7. ATTACK PATHS — UNDERSTANDING THE REAL DANGER
+-----------------------------------------------
+Now we move to Attack Paths. This section is critical for deep understanding.
+VaultScan does not only say “there is a problem.” It shows an attack chain —
+how small mistakes combine into a real breach story.
+
+Here you can see how a single weak setting can grow into full information
+exposure, and how the attack radius expands step by step. That is the
+difference between a checklist and true risk storytelling.
+
+[On screen: open a critical path — walk the chain]
+
+
+8. FIXING OPTIONS — FROM DETECTION TO SAFE REPAIR
+-------------------------------------------------
+VaultScan does not stop at scanning. In Fixing Options, you can resolve issues
+without fighting a confusing console full of raw cloud menus.
+
+First, we choose Plan all fixes. The platform builds a map of every problem
+that should be corrected. For each item, our model provides guidance and
+context so the team knows what will change and why.
+
+After reviewing the plan, you type the confirmation phrase and select Apply
+fixes. Misconfigurations are then corrected at the source. While the process
+runs, the system takes a snapshot of the previous state.
+
+With Fix change report, you can compare in detail how the cloud was configured
+before and what it looks like after the problems were resolved. And if anything
+unexpected happens, you can reverse the changes with Please make it as before —
+a controlled rollback path.
+
+Every important action is also expressed as CLI commands. You can copy them and
+run them directly in your cloud environment if you prefer a terminal workflow.
+
+[On screen: Plan → Apply → Fix change report → optional rollback]
+
+
+9. SCAN HISTORY — SECURITY AS A PROCESS
+---------------------------------------
+Finally, in Scan History, every scan operation is recorded. Security is not a
+one-time event — it is continuous care. Here you can prove progress over time:
+before and after fixes, and after each scheduled check.
+
+
+10. CLOSING
+-----------
+To summarize: VaultScan connects carefully, scans continuously, explains risk
+clearly, maps attack paths, fixes safely with plan–apply–rollback, emails
+results to your inbox, and keeps a full history of the journey. That is how we
+turn cloud misconfigurations from silent open doors into a controlled,
+auditable security process.
+
+Scan the vault. Secure the cloud. Before someone else does.
+Thank you — we are ready for questions.
+
+
+QUICK CUE CARD
+--------------
+1. Settings → connect cloud or Demo
+2. Schedule + Gmail → automatic scans & inbox alerts
+3. Launch scan → Overview score + standards + trend chart
+4. Generate Report / Findings → evidence & remediations
+5. Attack Paths → chain / blast radius story
+6. Fixing Options → Plan → Apply → Change report → Rollback
+7. CLI commands + Scan History → continuous improvement
+8. Close with the full loop sentence
